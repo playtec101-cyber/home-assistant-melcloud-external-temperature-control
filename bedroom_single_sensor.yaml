@@ -1,0 +1,215 @@
+# Bedroom example: one external temperature sensor
+# -------------------------------------------------
+# Required entities:
+#   climate.bedroom
+#   sensor.bedroom_temperature
+#   input_number.desired_temperature_bedroom
+#   input_number.last_automatic_target_bedroom
+#
+# This file contains:
+#   1. Main temperature compensation using one external sensor
+#   2. Manual MELCloud/App setpoint synchronization with feedback-loop protection
+#   3. Home Assistant controlled HEAT/COOL "Auto replacement" with deadband + delay
+#
+# For the last automation, start the unit in HEAT or COOL.
+# Home Assistant then switches only after the external temperature has stayed
+# outside the +/-1 °C deadband for 15 minutes.
+
+- id: melcloud_bedroom_external_temperature_control
+  alias: "MELCloud Bedroom - External temperature control"
+  description: >
+    Compensates the Mitsubishi target from one external room-temperature sensor.
+    The correction is limited to +/-3 °C and rounded to 0.5 °C. If the external
+    sensor is invalid but the Mitsubishi internal temperature is valid, the
+    desired temperature is sent without compensation as a safe fallback.
+  mode: restart
+  triggers:
+    - trigger: state
+      entity_id: input_number.desired_temperature_bedroom
+    - trigger: state
+      entity_id: sensor.bedroom_temperature
+    - trigger: state
+      entity_id: climate.bedroom
+      to: heat
+    - trigger: state
+      entity_id: climate.bedroom
+      to: cool
+    - trigger: state
+      entity_id: climate.bedroom
+      to: heat_cool
+    - trigger: state
+      entity_id: climate.bedroom
+      attribute: current_temperature
+    - trigger: time_pattern
+      minutes: "/5"
+
+  conditions:
+    - condition: state
+      entity_id: climate.bedroom
+      state:
+        - cool
+        - heat
+        - heat_cool
+
+  actions:
+    - variables:
+        raw_target: |
+          {% set desired_raw = states('input_number.desired_temperature_bedroom') %}
+          {% if not is_number(desired_raw) %}
+            {{ none }}
+          {% else %}
+            {% set desired = desired_raw | float %}
+            {% set external_raw = states('sensor.bedroom_temperature') %}
+            {% set internal = state_attr('climate.bedroom', 'current_temperature') %}
+
+            {% if is_number(external_raw) %}
+              {% set external = external_raw | float %}
+              {% set raw_error = external - desired %}
+              {% set error = [[raw_error, -3] | max, 3] | min %}
+              {% set calculated = desired - error %}
+            {% elif is_number(internal) %}
+              {# Fallback: no external delta correction. #}
+              {% set calculated = desired %}
+            {% else %}
+              {% set calculated = none %}
+            {% endif %}
+
+            {% if calculated is not none %}
+              {% set clamped = [[calculated, 16] | max, 30] | min %}
+              {{ ((clamped * 2) | round) / 2 }}
+            {% else %}
+              {{ none }}
+            {% endif %}
+          {% endif %}
+
+    - choose:
+        - conditions:
+            - condition: template
+              value_template: |
+                {% set external_raw = states('sensor.bedroom_temperature') %}
+                {% set internal = state_attr('climate.bedroom', 'current_temperature') %}
+                {{ (is_number(external_raw) or is_number(internal))
+                   and raw_target not in [none, 'None', 'unknown', 'unavailable', ''] }}
+            - condition: template
+              value_template: |
+                {% set last = states('input_number.last_automatic_target_bedroom') %}
+                {{ last in ['unknown', 'unavailable', none]
+                   or (raw_target | float(0) - (last | float(0))) | abs > 0.01 }}
+          sequence:
+            - action: input_number.set_value
+              target:
+                entity_id: input_number.last_automatic_target_bedroom
+              data:
+                value: "{{ raw_target }}"
+            - action: climate.set_temperature
+              target:
+                entity_id: climate.bedroom
+              data:
+                temperature: "{{ raw_target }}"
+
+
+- id: melcloud_bedroom_manual_setpoint_sync
+  alias: "MELCloud Bedroom - Accept manual setpoint changes"
+  description: >
+    Copies a real manual temperature change from MELCloud/App/voice control into
+    the desired-temperature helper, while ignoring targets written by the
+    automatic controller itself.
+  mode: single
+  triggers:
+    - trigger: state
+      entity_id: climate.bedroom
+      attribute: temperature
+
+  conditions:
+    - condition: template
+      value_template: |
+        {% set target = state_attr('climate.bedroom', 'temperature') %}
+        {% set automatic = states('input_number.last_automatic_target_bedroom') %}
+        {% set desired = states('input_number.desired_temperature_bedroom') %}
+        {{ target is not none
+           and automatic not in ['unknown', 'unavailable', none]
+           and desired not in ['unknown', 'unavailable', none]
+           and (target | float(18) - automatic | float(18)) | abs > 0.01
+           and (target | float(18) - desired | float(18)) | abs > 0.01 }}
+
+  actions:
+    - action: input_number.set_value
+      target:
+        entity_id: input_number.desired_temperature_bedroom
+      data:
+        value: "{{ state_attr('climate.bedroom', 'temperature') | float(18) }}"
+
+
+- id: melcloud_bedroom_automatic_heat_cool_switching
+  alias: "MELCloud Bedroom - Automatic HEAT/COOL switching"
+  description: >
+    Replaces unreliable native AUTO behavior with deliberate Home Assistant
+    switching between HEAT and COOL. Deadband: +/-1 °C. The condition must remain
+    true for 15 minutes before the mode changes.
+  mode: restart
+  triggers:
+    - trigger: template
+      id: cool
+      value_template: |
+        {% set external_raw = states('sensor.bedroom_temperature') %}
+        {% set internal = state_attr('climate.bedroom', 'current_temperature') %}
+        {% set desired_raw = states('input_number.desired_temperature_bedroom') %}
+        {% if is_number(external_raw) %}
+          {% set current = external_raw | float %}
+        {% elif is_number(internal) %}
+          {% set current = internal | float %}
+        {% else %}
+          {% set current = none %}
+        {% endif %}
+        {{ current is not none
+           and is_number(desired_raw)
+           and states('climate.bedroom') == 'heat'
+           and current >= ((desired_raw | float) + 1.0) }}
+      for:
+        hours: 0
+        minutes: 15
+        seconds: 0
+
+    - trigger: template
+      id: heat
+      value_template: |
+        {% set external_raw = states('sensor.bedroom_temperature') %}
+        {% set internal = state_attr('climate.bedroom', 'current_temperature') %}
+        {% set desired_raw = states('input_number.desired_temperature_bedroom') %}
+        {% if is_number(external_raw) %}
+          {% set current = external_raw | float %}
+        {% elif is_number(internal) %}
+          {% set current = internal | float %}
+        {% else %}
+          {% set current = none %}
+        {% endif %}
+        {{ current is not none
+           and is_number(desired_raw)
+           and states('climate.bedroom') == 'cool'
+           and current <= ((desired_raw | float) - 1.0) }}
+      for:
+        hours: 0
+        minutes: 15
+        seconds: 0
+
+  actions:
+    - choose:
+        - conditions:
+            - condition: trigger
+              id: cool
+          sequence:
+            - action: climate.set_hvac_mode
+              target:
+                entity_id: climate.bedroom
+              data:
+                hvac_mode: cool
+
+        - conditions:
+            - condition: trigger
+              id: heat
+          sequence:
+            - action: climate.set_hvac_mode
+              target:
+                entity_id: climate.bedroom
+              data:
+                hvac_mode: heat

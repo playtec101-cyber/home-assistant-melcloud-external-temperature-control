@@ -1,0 +1,211 @@
+# Living room example: multiple external temperature sensors
+# ---------------------------------------------------------
+# Required entities:
+#   climate.living_room
+#   sensor.living_room_temperature_average
+#   input_number.desired_temperature_living_room
+#   input_number.last_automatic_target_living_room
+#
+# The average sensor can be made with Home Assistant's Min/Max helper, type "mean".
+#
+# This file contains:
+#   1. Main temperature compensation
+#   2. Manual MELCloud/App setpoint synchronization with feedback-loop protection
+#   3. AUTO start helper: choose HEAT/COOL for 15 min, then return to native AUTO
+
+- id: melcloud_living_room_external_temperature_control
+  alias: "MELCloud Living Room - External temperature control"
+  description: >
+    Uses the external room-temperature average as the comfort reference.
+    In HEAT/COOL the target is compensated from the external error.
+    In Mitsubishi AUTO (heat_cool), the target is dynamically corrected using
+    the internal Mitsubishi room temperature so the unit sees the same error
+    that the external average sees. Correction is limited to +/-3 °C.
+  mode: restart
+  triggers:
+    - trigger: state
+      entity_id: input_number.desired_temperature_living_room
+    - trigger: state
+      entity_id: sensor.living_room_temperature_average
+    - trigger: state
+      entity_id: climate.living_room
+      to: heat
+    - trigger: state
+      entity_id: climate.living_room
+      to: cool
+    - trigger: state
+      entity_id: climate.living_room
+      to: heat_cool
+    - trigger: state
+      entity_id: climate.living_room
+      attribute: current_temperature
+    - trigger: time_pattern
+      minutes: "/5"
+
+  conditions:
+    - condition: state
+      entity_id: climate.living_room
+      state:
+        - cool
+        - heat
+        - heat_cool
+
+  actions:
+    - variables:
+        raw_target: |
+          {% set mode = states('climate.living_room') %}
+          {% set desired_raw = states('input_number.desired_temperature_living_room') %}
+          {% set external_raw = states('sensor.living_room_temperature_average') %}
+          {% set internal = state_attr('climate.living_room', 'current_temperature') %}
+          {% set min_raw = state_attr('climate.living_room', 'min_temp') %}
+          {% set max_raw = state_attr('climate.living_room', 'max_temp') %}
+          {% set min_temp = (min_raw | float) if is_number(min_raw) else 16.0 %}
+          {% set max_temp = (max_raw | float) if is_number(max_raw) else 30.0 %}
+
+          {% if not is_number(desired_raw) %}
+            {{ none }}
+          {% else %}
+            {% set desired = desired_raw | float %}
+            {% set calculated = none %}
+
+            {% if mode == 'heat_cool' %}
+              {# Native AUTO: only correct when external average and Mitsubishi internal temperature are valid. #}
+              {% if is_number(external_raw) and is_number(internal) %}
+                {% set external = external_raw | float %}
+                {% set raw_error = external - desired %}
+                {% set error = [[raw_error, -3.0] | max, 3.0] | min %}
+                {% set calculated = (internal | float) - error %}
+              {% endif %}
+
+            {% elif mode in ['heat', 'cool'] %}
+              {% if is_number(external_raw) %}
+                {% set external = external_raw | float %}
+                {% set raw_error = external - desired %}
+                {% set error = [[raw_error, -3.0] | max, 3.0] | min %}
+                {% set calculated = desired - error %}
+              {% else %}
+                {# Safe fallback in an unambiguous HEAT/COOL mode. #}
+                {% set calculated = desired %}
+              {% endif %}
+            {% endif %}
+
+            {% if calculated is not none %}
+              {% set clamped = [[calculated, min_temp] | max, max_temp] | min %}
+              {% set rounded = ((clamped * 2) | round) / 2 %}
+              {{ [[rounded, min_temp] | max, max_temp] | min }}
+            {% else %}
+              {{ none }}
+            {% endif %}
+          {% endif %}
+
+    - choose:
+        - conditions:
+            - condition: template
+              value_template: >
+                {{ raw_target not in [none, 'None', 'unknown', 'unavailable', ''] }}
+            - condition: template
+              value_template: |
+                {% set last = states('input_number.last_automatic_target_living_room') %}
+                {{ last in ['unknown', 'unavailable', none]
+                   or (raw_target | float(0) - (last | float(0))) | abs > 0.01 }}
+          sequence:
+            - action: input_number.set_value
+              target:
+                entity_id: input_number.last_automatic_target_living_room
+              data:
+                value: "{{ raw_target }}"
+            - action: climate.set_temperature
+              target:
+                entity_id: climate.living_room
+              data:
+                temperature: "{{ raw_target }}"
+
+
+- id: melcloud_living_room_manual_setpoint_sync
+  alias: "MELCloud Living Room - Accept manual setpoint changes"
+  description: >
+    Copies a real manual temperature change from MELCloud/App/voice control into
+    the desired-temperature helper, while ignoring targets written by the
+    automatic controller itself.
+  mode: single
+  triggers:
+    - trigger: state
+      entity_id: climate.living_room
+      attribute: temperature
+
+  conditions:
+    - condition: template
+      value_template: |
+        {% set target = state_attr('climate.living_room', 'temperature') %}
+        {% set automatic = states('input_number.last_automatic_target_living_room') %}
+        {% set desired = states('input_number.desired_temperature_living_room') %}
+        {{ target is not none
+           and automatic not in ['unknown', 'unavailable', none]
+           and desired not in ['unknown', 'unavailable', none]
+           and (target | float(22) - automatic | float(22)) | abs > 0.01
+           and (target | float(22) - desired | float(22)) | abs > 0.01 }}
+
+  actions:
+    - action: input_number.set_value
+      target:
+        entity_id: input_number.desired_temperature_living_room
+      data:
+        value: "{{ state_attr('climate.living_room', 'temperature') | float(22) }}"
+
+
+- id: melcloud_living_room_auto_start
+  alias: "MELCloud Living Room - Better AUTO start"
+  description: >
+    When the unit is switched from OFF to Mitsubishi AUTO (heat_cool), choose
+    HEAT or COOL from the external room average. Keep that clear mode for
+    15 minutes and then return to native AUTO. Inside +/-0.5 °C, native AUTO
+    remains active immediately.
+  mode: restart
+  triggers:
+    - trigger: state
+      entity_id: climate.living_room
+      from: "off"
+      to: heat_cool
+
+  conditions:
+    - condition: state
+      entity_id: climate.living_room
+      state: heat_cool
+
+  actions:
+    - variables:
+        current_raw: "{{ states('sensor.living_room_temperature_average') }}"
+        desired_raw: "{{ states('input_number.desired_temperature_living_room') }}"
+        start_mode: >-
+          {% if is_number(current_raw) and is_number(desired_raw) %}
+            {% set current = current_raw | float %}
+            {% set desired = desired_raw | float %}
+            {% if current >= (desired + 0.5) %}
+              cool
+            {% elif current <= (desired - 0.5) %}
+              heat
+            {% else %}
+              heat_cool
+            {% endif %}
+          {% else %}
+            heat_cool
+          {% endif %}
+
+    - choose:
+        - conditions:
+            - condition: template
+              value_template: "{{ start_mode in ['heat', 'cool'] }}"
+          sequence:
+            - action: climate.set_hvac_mode
+              target:
+                entity_id: climate.living_room
+              data:
+                hvac_mode: "{{ start_mode }}"
+            - delay: "00:15:00"
+            - condition: template
+              value_template: "{{ states('climate.living_room') == start_mode }}"
+            - action: climate.set_hvac_mode
+              target:
+                entity_id: climate.living_room
+              data:
+                hvac_mode: heat_cool

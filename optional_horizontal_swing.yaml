@@ -1,0 +1,73 @@
+# OPTIONAL - Living-room horizontal swing automation
+# ---------------------------------------------------
+# This is device-dependent. Verify that your climate entity supports
+# climate.set_swing_horizontal_mode and that the modes below match your unit.
+#
+# Required entities:
+#   climate.living_room
+#   sensor.living_room_temperature_average
+#   input_number.desired_temperature_living_room
+
+- id: melcloud_living_room_horizontal_swing
+  alias: "MELCloud Living Room - Horizontal swing automation"
+  description: >
+    Use horizontal swing while the external room average differs from the desired
+    temperature by at least 0.7 °C. Return to the center position when the error
+    is at most 0.3 °C. Each condition must be stable for one minute.
+  mode: restart
+  triggers:
+    - trigger: template
+      id: swing
+      value_template: |
+        {% set avg_raw = states('sensor.living_room_temperature_average') %}
+        {% set desired_raw = states('input_number.desired_temperature_living_room') %}
+        {{ states('climate.living_room') in ['heat', 'cool', 'heat_cool']
+           and is_number(avg_raw)
+           and is_number(desired_raw)
+           and ((avg_raw | float) - (desired_raw | float)) | abs >= 0.7 }}
+      for:
+        hours: 0
+        minutes: 1
+        seconds: 0
+
+    - trigger: template
+      id: center
+      value_template: |
+        {% set avg_raw = states('sensor.living_room_temperature_average') %}
+        {% set desired_raw = states('input_number.desired_temperature_living_room') %}
+        {{ states('climate.living_room') in ['heat', 'cool', 'heat_cool']
+           and is_number(avg_raw)
+           and is_number(desired_raw)
+           and ((avg_raw | float) - (desired_raw | float)) | abs <= 0.3 }}
+      for:
+        hours: 0
+        minutes: 1
+        seconds: 0
+
+  actions:
+    - choose:
+        - conditions:
+            - condition: trigger
+              id: swing
+            - condition: template
+              value_template: >
+                {{ state_attr('climate.living_room', 'swing_horizontal_mode') != 'swing' }}
+          sequence:
+            - action: climate.set_swing_horizontal_mode
+              target:
+                entity_id: climate.living_room
+              data:
+                swing_horizontal_mode: swing
+
+        - conditions:
+            - condition: trigger
+              id: center
+            - condition: template
+              value_template: >
+                {{ state_attr('climate.living_room', 'swing_horizontal_mode') != '3' }}
+          sequence:
+            - action: climate.set_swing_horizontal_mode
+              target:
+                entity_id: climate.living_room
+              data:
+                swing_horizontal_mode: "3"

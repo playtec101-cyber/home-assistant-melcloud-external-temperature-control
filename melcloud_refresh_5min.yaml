@@ -1,0 +1,25 @@
+# Legacy MELCloud: force an additional refresh every 5 minutes.
+#
+# IMPORTANT:
+# - This was tested with Home Assistant's legacy "MELCloud" integration.
+# - The newer "MELCloud Home" integration has different polling behavior.
+# - Replace the entity IDs with your own MELCloud climate entities.
+# - "/5" runs at clock-aligned 5-minute boundaries (:00, :05, :10, ...),
+#   so the maximum wait is about 5 minutes, not a fixed 5-minute delay.
+#
+# The tested setup left the integration's normal polling enabled and added
+# these extra refreshes.
+
+- id: melcloud_force_refresh_every_5_minutes
+  alias: "MELCloud - Force refresh every 5 minutes"
+  mode: single
+  triggers:
+    - trigger: time_pattern
+      minutes: "/5"
+
+  actions:
+    - action: homeassistant.update_entity
+      target:
+        entity_id:
+          - climate.living_room
+          - climate.bedroom

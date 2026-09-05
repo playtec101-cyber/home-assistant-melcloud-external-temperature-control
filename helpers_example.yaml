@@ -1,0 +1,48 @@
+# Example helpers for the tutorial.
+# You can create these in the Home Assistant UI instead.
+#
+# Replace the source sensor entity IDs with your own temperature sensors.
+# If you use the UI for the average:
+# Settings -> Devices & services -> Helpers -> Create helper -> Min/Max
+# Type: Mean
+
+input_number:
+  desired_temperature_living_room:
+    name: Desired Temperature Living Room
+    min: 16
+    max: 30
+    step: 0.5
+    unit_of_measurement: "°C"
+
+  last_automatic_target_living_room:
+    name: Last Automatic Target Living Room
+    min: 16
+    max: 30
+    step: 0.5
+    unit_of_measurement: "°C"
+
+  desired_temperature_bedroom:
+    name: Desired Temperature Bedroom
+    min: 16
+    max: 30
+    step: 0.5
+    unit_of_measurement: "°C"
+
+  last_automatic_target_bedroom:
+    name: Last Automatic Target Bedroom
+    min: 16
+    max: 30
+    step: 0.5
+    unit_of_measurement: "°C"
+
+sensor:
+  - platform: min_max
+    name: Living Room Temperature Average
+    unique_id: living_room_temperature_average
+    type: mean
+    round_digits: 1
+    entity_ids:
+      - sensor.living_room_temperature_1
+      - sensor.living_room_temperature_2
+      - sensor.living_room_temperature_3
+      - sensor.living_room_temperature_4

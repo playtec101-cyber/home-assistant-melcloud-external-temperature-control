@@ -1,0 +1,9 @@
+# Validation report
+
+- `helpers_example.yaml`: YAML syntax OK
+- `living_room_multi_sensor.yaml`: YAML syntax OK
+- `bedroom_single_sensor.yaml`: YAML syntax OK
+- `melcloud_refresh_5min.yaml`: YAML syntax OK
+- `optional_horizontal_swing.yaml`: YAML syntax OK
+
+Security scan of the public YAML examples found no IP addresses, e-mail addresses, MAC addresses, URLs, passwords, API-key labels, bearer tokens or webhook labels.
