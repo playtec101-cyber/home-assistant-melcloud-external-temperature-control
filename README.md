@@ -1,52 +1,140 @@
-# Home Assistant + Mitsubishi MELCloud: external room-temperature control
+# Home Assistant + Mitsubishi MELCloud / MELCloud Home: external room-temperature control
 
-A tested Home Assistant approach for Mitsubishi Electric air conditioners using the **legacy MELCloud integration**, with external room-temperature sensors as the real comfort reference.
+A tested Home Assistant approach for Mitsubishi Electric air conditioners using external room-temperature sensors as the real comfort reference instead of relying only on the temperature sensor inside the indoor unit.
+
+The project now contains examples for both:
+
+- the **legacy `MELCloud` integration**
+- the newer **`MELCloud Home` integration** available in Home Assistant 2026.7+
 
 The project covers:
 
-- one external sensor (bedroom example)
-- multiple external sensors combined to a mean value (living-room example)
-- compensated target temperatures instead of trusting only the indoor-unit sensor
-- manual target changes from MELCloud/App/voice control
+- one external room sensor
+- multiple external sensors combined into a mean value
+- compensated Mitsubishi target temperatures
+- improved behavior in native Mitsubishi AUTO mode
+- manual target changes from MELCloud / MELCloud Home / app / voice control
 - feedback-loop protection
-- two practical approaches to poor AUTO-mode behavior
-- an optional 5-minute forced MELCloud refresh
+- weather-dependent AUTO neutral-zone adjustment
 - optional horizontal swing control
+- an optional 5-minute forced refresh for **legacy MELCloud only**
 
 > **Not affiliated with Mitsubishi Electric or the Home Assistant project.**
+>
 > Back up your Home Assistant configuration before changing automations.
+
+---
 
 ## Why this exists
 
 In the tested installation, fixed **HEAT** and **COOL** modes were generally usable, but Mitsubishi's native **AUTO** behavior was much less satisfactory.
 
-The core problem is the temperature reference. The indoor unit measures temperature at the unit itself, often high on a wall and in its own airflow. That can differ noticeably from the temperature where people actually sit, sleep, or live.
+The main problem is the temperature reference.
 
-This matters especially in AUTO mode because the controller also has to decide **whether to heat or cool**.
+The indoor unit measures temperature at the unit itself, often high on a wall and inside or close to its own airflow. That temperature can differ noticeably from the temperature where people actually sit, sleep, or live.
 
-The solution is to let Home Assistant use one or more external room sensors as the comfort reference and continuously compensate the Mitsubishi target.
+This matters especially in AUTO mode because the Mitsubishi controller must decide both:
 
-## Important: legacy MELCloud vs MELCloud Home
+- what target temperature to regulate toward
+- whether heating or cooling is required
 
-This repository was tested with Home Assistant's **legacy `MELCloud` integration**.
+The approach used here lets Home Assistant treat one or more external room-temperature sensors as the comfort reference and compensate the target sent to the Mitsubishi unit.
 
-Home Assistant also has a newer **`MELCloud Home` integration**. As of Home Assistant 2026.7+, its documented update behavior is different, so the 5-minute polling workaround in this repository is mainly relevant to legacy MELCloud.
+The Mitsubishi controller still performs the actual compressor and fan control.
 
-Official docs:
+---
+
+## Legacy MELCloud vs MELCloud Home
+
+This repository originally documented Home Assistant's **legacy `MELCloud` integration**.
+
+A tested **MELCloud Home** example is now also included:
+
+`melcloud_home_external_temperature_control_public.yaml`
+
+### Important differences
+
+With the legacy MELCloud integration, native Mitsubishi AUTO is represented as:
+
+```text
+heat_cool
+```
+
+With MELCloud Home, native Mitsubishi AUTO is represented as:
+
+```text
+auto
+```
+
+In the tested MELCloud Home climate entity, the following HVAC modes were exposed:
+
+```text
+off
+heat
+cool
+auto
+dry
+fan_only
+```
+
+MELCloud Home also exposes the values required by this compensation approach, including:
+
+- target temperature
+- current room temperature
+- supported HVAC modes
+- fan-speed modes
+- vertical vane modes
+- horizontal vane modes, where supported by the physical unit
+
+In the tested unit, horizontal vane positions were exposed as:
+
+```text
+auto
+swing
+left
+left_centre
+centre
+right_centre
+right
+```
+
+The MELCloud Home example therefore uses:
+
+```text
+centre
+```
+
+for the horizontal center position instead of a legacy numeric position such as `3`.
+
+---
+
+## MELCloud Home polling behavior
+
+Home Assistant documents MELCloud Home as polling the cloud service approximately every **60 seconds**.
+
+Because of that, the separate 5-minute `homeassistant.update_entity` workaround previously used with legacy MELCloud is **not included in the MELCloud Home example**.
+
+The MELCloud Home example can still contain 5-minute automation triggers for regulation or safety checks.
+
+Those are normal Home Assistant control checks and are **not forced MELCloud refreshes**.
+
+Official Home Assistant documentation:
 
 - https://www.home-assistant.io/integrations/melcloud/
 - https://www.home-assistant.io/integrations/melcloud_home/
 
-## How the compensation works
+---
+
+## How the external-temperature compensation works
 
 ### Fixed HEAT / COOL
 
 Let:
 
-- `desired` = the temperature you actually want in the room
-- `external` = temperature from the external sensor or sensor average
+- `desired` = the room temperature you actually want
+- `external` = the external room sensor or room-sensor average
 
-The external error is:
+The room error is:
 
 ```text
 error = external - desired
@@ -58,76 +146,205 @@ The Mitsubishi target is then compensated:
 target = desired - error
 ```
 
+Example:
+
+```text
+desired = 23.0 °C
+external = 22.0 °C
+
+error = -1.0 °C
+target = 24.0 °C
+```
+
+Home Assistant therefore asks the Mitsubishi unit for a higher target until the external room sensor reaches the real desired temperature.
+
 The correction is limited to **±3 °C** and rounded to the nearest **0.5 °C**.
 
-### Living room: native Mitsubishi AUTO
+---
 
-For the multi-sensor living-room setup, the tested configuration uses a different calculation while the climate entity is in `heat_cool`:
+## Native Mitsubishi AUTO compensation
+
+Native AUTO needs slightly different handling because the Mitsubishi unit itself decides whether to heat or cool.
+
+The tested AUTO calculation is:
 
 ```text
 Mitsubishi target =
-Mitsubishi internal temperature - (external average - desired temperature)
+Mitsubishi internal temperature - (external room temperature - desired temperature)
 ```
 
-This makes the Mitsubishi controller "see" approximately the same error that the external room average sees.
+For a room using several external sensors:
 
-The source configuration also avoids continuously forcing HEAT/Cool in normal operation.
+```text
+Mitsubishi target =
+Mitsubishi internal temperature - (external room average - desired temperature)
+```
 
-## AUTO-mode strategies used here
+This makes the Mitsubishi controller approximately "see" the same temperature error that the external room sensor sees.
 
-### Living room: multiple sensors + corrected native AUTO
+The automation does **not** continuously force HEAT and COOL during normal AUTO operation.
 
-When switched from OFF to `heat_cool`:
+---
 
-- external average >= desired + 0.5 °C -> start in COOL
-- external average <= desired - 0.5 °C -> start in HEAT
-- within ±0.5 °C -> stay in AUTO
+## AUTO neutral zone
 
-If HEAT or COOL is selected, it remains active for **15 minutes**, then the unit returns to native Mitsubishi AUTO (`heat_cool`), where the dynamic target correction continues.
+A small neutral zone is used around the desired room temperature.
 
-### Bedroom: one sensor + Home Assistant HEAT/COOL switching
+Without a neutral zone, small sensor differences and 0.5 °C target rounding can cause the calculated Mitsubishi target to move enough to provoke unnecessary heating or cooling even though the real room temperature is already close to the desired value.
 
-The single-sensor example uses a more conservative replacement for native AUTO:
+### Default neutral zone
 
-- if currently HEAT and the room stays >= desired + 1.0 °C for 15 min -> switch to COOL
-- if currently COOL and the room stays <= desired - 1.0 °C for 15 min -> switch to HEAT
+When the outside temperature is close to the desired indoor temperature, or when no valid outside value is available:
 
-That provides a **2 °C total deadband** and a **15-minute stability delay**, preventing rapid mode changes.
+```text
+desired - 0.25 °C
+to
+desired + 0.25 °C
+```
+
+Inside this range, the automation uses the Mitsubishi internal temperature as the Mitsubishi target instead of deliberately creating a heating or cooling offset.
+
+This keeps native Mitsubishi AUTO active while avoiding an unnecessary correction impulse near the real room target.
+
+---
+
+## Weather-dependent AUTO neutral zone
+
+The MELCloud Home example can use an outside-temperature entity to shift the AUTO thresholds.
+
+The outside temperature does **not** directly decide whether the Mitsubishi unit heats or cools.
+
+The external **indoor room temperature** remains the primary control value.
+
+### Outside clearly warmer than desired indoor temperature
+
+If:
+
+```text
+outside >= desired + 0.5 °C
+```
+
+the neutral range becomes:
+
+```text
+desired - 0.5 °C
+to
+desired + 0.25 °C
+```
+
+This delays unnecessary heating while still allowing cooling somewhat earlier.
+
+### Outside clearly colder than desired indoor temperature
+
+If:
+
+```text
+outside <= desired - 0.5 °C
+```
+
+the neutral range becomes:
+
+```text
+desired - 0.25 °C
+to
+desired + 0.5 °C
+```
+
+This allows heating somewhat earlier while delaying unnecessary cooling.
+
+### Important
+
+The weather value only shifts the neutral thresholds.
+
+It never replaces the external indoor room sensor and never acts as the room temperature.
+
+---
+
+## AUTO start behavior
+
+When native Mitsubishi AUTO is started from OFF, the tested larger configuration can temporarily choose a clear HEAT or COOL direction based on the external room temperature.
+
+Typical behavior:
+
+```text
+external >= desired + 0.5 °C -> start in COOL
+external <= desired - 0.5 °C -> start in HEAT
+within the start band         -> remain in native AUTO
+```
+
+If HEAT or COOL is selected, it can remain active for a short initialization period before returning to native Mitsubishi AUTO.
+
+In the tested source configuration, this initialization period was **15 minutes**.
+
+The purpose is to give the unit an unambiguous initial direction without permanently replacing Mitsubishi's native AUTO logic.
+
+---
 
 ## Files
 
 | File | Purpose |
 | --- | --- |
-| `helpers_example.yaml` | Example desired-temperature helpers, feedback-loop helpers, and multi-sensor mean |
-| `living_room_multi_sensor.yaml` | Multi-sensor living-room control + manual sync + improved AUTO start |
-| `bedroom_single_sensor.yaml` | Single-sensor bedroom control + manual sync + HA-controlled HEAT/COOL switching |
-| `melcloud_refresh_5min.yaml` | Optional forced legacy-MELCloud refresh every 5 minutes |
-| `optional_horizontal_swing.yaml` | Optional device-dependent horizontal swing automation |
+| `melcloud_home_external_temperature_control_public.yaml` | Consolidated MELCloud Home example with external-sensor compensation, native AUTO, weather-dependent neutral zone, manual-target sync and optional horizontal swing |
+| `helpers_example.yaml` | Example desired-temperature helpers, feedback-loop helpers and multi-sensor mean |
+| `living_room_multi_sensor.yaml` | Legacy MELCloud multi-sensor living-room example |
+| `bedroom_single_sensor.yaml` | Legacy MELCloud single-sensor bedroom example |
+| `melcloud_refresh_5min.yaml` | Optional forced refresh for **legacy MELCloud only** |
+| `optional_horizontal_swing.yaml` | Legacy/device-dependent optional horizontal swing example |
+| `SECURITY_PRIVACY.md` | Security and privacy notes |
+| `VALIDATION.txt` | Validation notes for the public example files |
+
+The older files remain intentionally available for users who still use Home Assistant's legacy MELCloud integration.
+
+---
 
 ## 1. Create the helpers
 
 The easiest method is the Home Assistant UI.
 
-For the desired-temperature and last-automatic-target values create **Number helpers**.
+For the desired-temperature and last-automatic-target values, create **Number helpers**.
 
-For a room with several temperature sensors, create:
+Typical generic entity IDs used by the examples are:
+
+```text
+input_number.desired_temperature_living_room
+input_number.last_automatic_target_living_room
+
+input_number.desired_temperature_bedroom
+input_number.last_automatic_target_bedroom
+```
+
+For a room with several temperature sensors, create a mean/average sensor.
+
+For example:
 
 **Settings -> Devices & services -> Helpers -> Create helper -> Min/Max**
 
 Choose:
 
-- input entities: your room-temperature sensors
-- type: **Mean**
+- your room-temperature sensors as input entities
+- **Mean** as the calculation type
 
-Home Assistant's Min/Max helper can calculate the mean of multiple sensors.
+A generic example entity is:
 
-Alternatively use the example in `helpers_example.yaml`.
+```text
+sensor.living_room_temperature_average
+```
+
+Alternatively, adapt the example in:
+
+`helpers_example.yaml`
+
+---
 
 ## 2. Replace the example entity IDs
 
+All public files use generic placeholders.
+
+You must replace them with the entity IDs from your own Home Assistant installation.
+
 ### Living room
 
-Replace:
+Typical placeholders are:
 
 ```text
 climate.living_room
@@ -138,7 +355,7 @@ input_number.last_automatic_target_living_room
 
 ### Bedroom
 
-Replace:
+Typical placeholders are:
 
 ```text
 climate.bedroom
@@ -147,93 +364,305 @@ input_number.desired_temperature_bedroom
 input_number.last_automatic_target_bedroom
 ```
 
-No IP address, password, API key, access token, MAC address, webhook ID, e-mail address or other credential is required in these examples.
+### Weather entity
 
-## 3. Install the automations
+The MELCloud Home public example also uses:
+
+```text
+weather.home
+```
+
+Replace that with your own weather entity if you want to use the weather-dependent AUTO neutral zone.
+
+No IP address, password, API key, access token, MAC address, webhook ID or e-mail address is required in these automation examples.
+
+---
+
+## 3. Check the HVAC mode names
+
+This is particularly important when choosing between the legacy and MELCloud Home examples.
+
+### Legacy MELCloud
+
+Native Mitsubishi AUTO may appear as:
+
+```text
+heat_cool
+```
+
+### MELCloud Home
+
+Native Mitsubishi AUTO appears as:
+
+```text
+auto
+```
+
+Do not blindly replace files between the two integrations without checking the supported modes of your own climate entity.
+
+---
+
+## 4. Check the available climate attributes
+
+Before adapting the examples, inspect the climate entity in Home Assistant and check which attributes your unit actually exposes.
+
+The MELCloud Home setup used for this project exposed:
+
+```text
+hvac_modes
+min_temp
+max_temp
+fan_modes
+swing_modes
+swing_horizontal_modes
+current_temperature
+temperature
+fan_mode
+swing_mode
+swing_horizontal_mode
+```
+
+Not every Mitsubishi model necessarily exposes exactly the same feature set.
+
+The external-temperature compensation requires at least:
+
+- a usable climate entity
+- target temperature
+- current Mitsubishi room temperature for native AUTO compensation
+- an external indoor room-temperature sensor or sensor average
+
+Horizontal swing control is optional.
+
+---
+
+## 5. Install the automations
 
 You can either:
 
 1. create automations in the Home Assistant UI and use **Edit in YAML**, or
-2. merge the list entries into your YAML automation configuration.
+2. merge the automation list entries into your YAML automation configuration.
 
-Home Assistant's current automation YAML format uses `triggers`, `conditions`, and `actions`.
+The examples use Home Assistant's current automation YAML structure with:
 
-After saving/reloading the automations, a full Home Assistant restart is normally not required.
+```text
+triggers
+conditions
+actions
+```
 
-## 4. Initialize the helper values
+After saving the configuration, reload the automations or restart Home Assistant if required by your setup.
+
+---
+
+## 6. Initialize the helper values
 
 Before the first test:
 
-- set `desired_temperature_*` to your real comfort target
-- set `last_automatic_target_*` to a valid temperature inside the unit's normal range
+- set `desired_temperature_*` to your normal comfort target
+- set `last_automatic_target_*` to a valid temperature within the unit's supported range
 
-After the controller has run once, it maintains the `last_automatic_target_*` helper automatically.
+After the controller has run successfully, it maintains the `last_automatic_target_*` helper automatically.
 
-## 5. Manual changes from MELCloud/App/voice control
+---
 
-The manual-sync automations watch the climate entity's `temperature` attribute.
+## 7. Manual changes from MELCloud / MELCloud Home / app / voice control
 
-If the new value differs from both:
+The manual-sync automations monitor the climate entity's target `temperature`.
+
+If a newly reported target differs from both:
 
 1. the last target written automatically by Home Assistant, and
 2. the current desired-temperature helper,
 
 the change is treated as a genuine manual request and copied into the desired-temperature helper.
 
-That is the feedback-loop protection.
+This prevents Home Assistant's own compensated target from being fed back into the desired-temperature setting.
 
-## 6. Reduce legacy MELCloud update latency
+In other words, it is a simple feedback-loop protection mechanism.
 
-The legacy MELCloud integration can feel slow when a setpoint is changed outside Home Assistant.
+---
 
-The tested workaround is `homeassistant.update_entity` on the MELCloud climate entity every five minutes:
+## 8. Original Mitsubishi infrared remote control
+
+The original Mitsubishi **infrared remote controls were not tested as part of this project**.
+
+They are not used in the tested installation.
+
+The tested system is operated through Home Assistant, MELCloud / MELCloud Home, supported apps and voice control.
+
+Because the original IR remote is not used, this project does **not** currently confirm how changes made directly with the Mitsubishi infrared remote are reflected back through:
+
+```text
+indoor unit
+-> MELCloud / MELCloud Home
+-> Home Assistant
+```
+
+For example, the following have not been verified with the original IR remote:
+
+- target-temperature changes
+- HVAC mode changes
+- fan-speed changes
+- vertical vane changes
+- horizontal vane changes
+- timing and reliability of the resulting Home Assistant state update
+
+This does **not** mean that the IR remote is known to be incompatible.
+
+It simply means that this control path has not been tested in the source installation.
+
+Feedback from users who regularly use the original Mitsubishi IR remote together with MELCloud Home is therefore especially welcome.
+
+---
+
+## 9. Legacy MELCloud 5-minute refresh
+
+This section applies only to the **legacy MELCloud integration**.
+
+The legacy integration can sometimes feel slow when a target is changed outside Home Assistant.
+
+The tested workaround was to call:
+
+```yaml
+action: homeassistant.update_entity
+target:
+  entity_id: climate.living_room
+```
+
+every five minutes:
 
 ```yaml
 triggers:
   - trigger: time_pattern
     minutes: "/5"
-
-actions:
-  - action: homeassistant.update_entity
-    target:
-      entity_id: climate.living_room
 ```
 
-`/5` is **clock aligned**: `:00`, `:05`, `:10`, `:15`, etc. It does not wait exactly five minutes after your change.
+`/5` is **clock aligned**:
 
-### Test result
+```text
+:00
+:05
+:10
+:15
+...
+```
 
-In the tested setup, a MELCloud target change to **22.5 °C** was visible in Home Assistant at **19:10:02**, the next five-minute polling boundary. The previous logged value had been **21.5 °C at 19:05:09**.
+It does not mean "five minutes after the last change."
 
-The same `update_entity` action also worked immediately when the automation was manually executed.
+### Tested legacy result
 
-The tested setup **left MELCloud's normal polling enabled** and simply added an extra 5-minute refresh.
+In the original tested setup, a MELCloud target change to **22.5 °C** became visible in Home Assistant at **19:10:02**, the next five-minute polling boundary.
 
-Home Assistant also documents `homeassistant.update_entity` as the standard way to define custom polling behavior:
+The previously logged value had been **21.5 °C at 19:05:09**.
 
-https://www.home-assistant.io/common-tasks/general/#defining-a-custom-polling-interval
+The same `homeassistant.update_entity` call also worked when manually executed.
 
-Do not poll aggressively. Five minutes is the interval tested here. If you see rate-limit or API errors, increase it.
+The normal legacy MELCloud polling remained enabled; the five-minute action was only an additional refresh.
 
-## 7. Failure behavior
+Do not poll cloud APIs aggressively.
 
-### Living room
+### MELCloud Home users
 
-- In native AUTO, no new correction is sent if either the external average or Mitsubishi internal temperature is invalid.
-- In fixed HEAT/COOL, if the external average is invalid, the desired temperature is used as a safe fallback.
+Do **not** copy this workaround automatically to MELCloud Home.
 
-### Bedroom
+MELCloud Home already polls the API approximately every 60 seconds, so the separate five-minute forced-refresh automation is not part of the new MELCloud Home example.
 
-- If the external sensor is invalid but Mitsubishi's internal temperature is still valid, the desired temperature is sent without external compensation.
-- If both are invalid, no new target is sent.
+---
 
-## 8. Optional swing automation
+## 10. Failure behavior
 
-`optional_horizontal_swing.yaml` is included because it was part of the tested larger setup.
+### Native AUTO
 
-It enables horizontal swing when the room-average error is at least **0.7 °C** for one minute and returns to the center position once the error is at most **0.3 °C** for one minute.
+If either:
 
-Horizontal swing modes are device-dependent. Check the values supported by your own climate entity before enabling this automation.
+- the required external room temperature, or
+- the Mitsubishi internal room temperature
+
+is invalid or unavailable, no new AUTO compensation target is calculated.
+
+The automation does not invent a replacement room value.
+
+### Fixed HEAT / COOL
+
+If the external room sensor is unavailable while using an explicit HEAT or COOL mode, the normal desired temperature can be used as a safe fallback.
+
+The Mitsubishi unit then regulates using its own internal sensor until the external sensor becomes available again.
+
+---
+
+## 11. Optional horizontal swing control
+
+Horizontal vane control depends on the integration and the physical Mitsubishi unit.
+
+### MELCloud Home
+
+For supported units, MELCloud Home exposes named horizontal vane modes.
+
+In the tested unit the available modes were:
+
+```text
+auto
+swing
+left
+left_centre
+centre
+right_centre
+right
+```
+
+The public example uses:
+
+```text
+swing
+```
+
+while the room is sufficiently far from the desired temperature, and:
+
+```text
+centre
+```
+
+when the room is close to the desired temperature.
+
+The example uses separate thresholds so that the vane does not constantly switch around one exact temperature boundary.
+
+Before enabling this feature, check the horizontal swing modes actually exposed by your own climate entity.
+
+The standard Home Assistant action used is:
+
+```yaml
+action: climate.set_swing_horizontal_mode
+target:
+  entity_id: climate.living_room
+data:
+  swing_horizontal_mode: centre
+```
+
+### Legacy MELCloud
+
+The older `optional_horizontal_swing.yaml` file remains available because vane representation can differ between the legacy integration and individual devices.
+
+---
+
+## 12. What is intentionally not included
+
+The public files focus on the reusable Mitsubishi/external-temperature concept.
+
+Installation-specific logic has intentionally been removed, including examples such as:
+
+- additional electric heaters
+- radiator or thermostat scheduling
+- FRITZ!DECT-specific control
+- holiday/away logic
+- house-specific sensors
+- network configuration
+- local IP addresses
+- personal device names
+- account information
+
+This keeps the examples easier to understand and safer to publish.
+
+---
 
 ## Security and privacy
 
@@ -242,7 +671,8 @@ The public examples intentionally contain:
 - no private or public IP addresses
 - no passwords
 - no MELCloud credentials
-- no Home Assistant long-lived tokens
+- no MELCloud Home credentials
+- no Home Assistant long-lived access tokens
 - no API keys
 - no webhook IDs
 - no MAC addresses
@@ -251,20 +681,115 @@ The public examples intentionally contain:
 
 Entity IDs are generic placeholders.
 
-Before posting your own configuration publicly, search it for credentials and unique device/network identifiers.
+Before publishing your own adapted configuration, search it again for credentials and unique device or network identifiers.
 
-## Tested source configuration
+Never publish your MELCloud / MELCloud Home login credentials or Home Assistant access tokens.
 
-The public examples were distilled from a working Home Assistant configuration dated **2026-09-05**. House-specific logic unrelated to the Mitsubishi temperature-control method (extra heaters, holiday mode, FRITZ!DECT scheduling, etc.) was intentionally removed so the examples are easier to reuse.
+---
+
+## Tested source configurations
+
+The original public examples were distilled from a working Home Assistant configuration tested with the **legacy MELCloud integration** in September 2026.
+
+The installation was subsequently migrated to **MELCloud Home**, and the reusable external-room-temperature concept was tested again.
+
+The migration confirmed that the basic compensation principle remains usable because MELCloud Home continues to expose the important climate information needed by the controller, including:
+
+- current room temperature
+- target temperature
+- HEAT
+- COOL
+- native AUTO
+
+The tested installation also confirmed the MELCloud Home representation of native AUTO as:
+
+```text
+auto
+```
+
+instead of the legacy:
+
+```text
+heat_cool
+```
+
+The tested installation exposed named horizontal vane positions, including:
+
+```text
+centre
+```
+
+instead of the numeric center value used in the previous legacy configuration.
+
+The separate legacy 5-minute forced refresh was removed after migration to MELCloud Home.
+
+The public MELCloud Home example reflects these integration differences without exposing the installation-specific heating, holiday, network or device-control logic of the source system.
+
+### Control methods tested
+
+The installation is normally controlled using:
+
+- Home Assistant
+- MELCloud / MELCloud Home
+- supported app controls
+- voice control
+
+### Control method not tested
+
+The original Mitsubishi **infrared remote control is not used in the source installation and was therefore not tested**.
+
+No claim is made that IR-remote changes are or are not synchronized correctly with MELCloud Home and Home Assistant.
+
+That remains an open test case for users who use the original Mitsubishi remote.
+
+---
+
+## Known observation points
+
+The current control strategy intentionally remains relatively simple.
+
+Possible future refinements include:
+
+- stateful hysteresis around the outside-temperature regime thresholds
+- a more stateful hold strategy inside the AUTO neutral zone
+- a hard minimum interval between cloud target commands
+
+These are currently observation points rather than confirmed defects.
+
+The examples already avoid unnecessary target commands by comparing the calculated target with both:
+
+- the last target written automatically
+- the target currently reported by the Mitsubishi climate entity
+
+Changes should therefore be based on actual traces or observed command behavior rather than adding complexity preemptively.
+
+---
 
 ## Feedback
 
-If you test this on another Mitsubishi/MELCloud setup, please open an issue or discussion with:
+If you test these examples on another Mitsubishi setup, please include:
 
 - Home Assistant version
-- legacy MELCloud or MELCloud Home
+- **legacy MELCloud** or **MELCloud Home**
 - Mitsubishi indoor-unit model
 - external sensor type
-- whether fixed HEAT/COOL and AUTO behave as expected
+- single sensor or multi-sensor average
+- whether fixed HEAT/COOL behaves as expected
+- whether native AUTO behaves as expected
+- whether horizontal vane control works on your unit
+- whether changes made with the original Mitsubishi IR remote are correctly reflected in Home Assistant
+- approximate update delay between a device/app/remote change and Home Assistant, if relevant
 
-Please do **not** post passwords, tokens, e-mail addresses, public endpoints or other secrets.
+Reports from users who use the original Mitsubishi infrared remote are particularly useful because that control path was **not tested in the source installation**.
+
+Please do **not** post:
+
+- passwords
+- access tokens
+- API keys
+- e-mail addresses
+- public endpoints
+- private network information
+- other credentials or secrets
+
+Issues, test results and improvements are welcome.
