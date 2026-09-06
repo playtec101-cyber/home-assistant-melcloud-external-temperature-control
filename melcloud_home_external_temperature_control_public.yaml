@@ -1,0 +1,449 @@
+# =============================================================================
+# Home Assistant + Mitsubishi MELCloud Home
+# External room-temperature control - public neutral example
+# Updated for MELCloud Home / Home Assistant 2026.7+
+#
+# PRIVACY:
+# - No passwords, tokens, API keys, IP addresses, MAC addresses, e-mail addresses
+#   or personal names are included.
+# - All entity IDs below are generic placeholders and MUST be adapted.
+#
+# MELCloud Home differences compared with the legacy MELCloud integration:
+# - Native Mitsubishi AUTO is exposed as: auto
+# - Horizontal center vane position is exposed as: centre
+# - The old optional 5-minute homeassistant.update_entity refresh is not needed
+#   for MELCloud Home and is intentionally NOT included here.
+#
+# Required example entities:
+#   climate.living_room
+#   climate.bedroom
+#   sensor.living_room_temperature_average
+#   sensor.bedroom_temperature
+#   input_number.desired_temperature_living_room
+#   input_number.desired_temperature_bedroom
+#   input_number.last_automatic_target_living_room
+#   input_number.last_automatic_target_bedroom
+#   weather.home
+#
+# This public example contains only the reusable Mitsubishi/external-sensor logic.
+# House-specific FRITZ!DECT, auxiliary-heater, holiday, network and device logic
+# is intentionally omitted.
+# =============================================================================
+
+- id: melcloud_home_living_room_external_temperature
+  alias: "MELCloud Home: Living room external-temperature control"
+  description: >
+    Compensates the Mitsubishi target temperature using an external room
+    temperature average. In native AUTO (auto), weather only shifts the neutral
+    thresholds; the external room temperature remains the primary controller.
+  mode: restart
+
+  triggers:
+    - trigger: state
+      entity_id: input_number.desired_temperature_living_room
+
+    - trigger: state
+      entity_id: sensor.living_room_temperature_average
+
+    - trigger: state
+      entity_id: climate.living_room
+      to: heat
+
+    - trigger: state
+      entity_id: climate.living_room
+      to: cool
+
+    - trigger: state
+      entity_id: climate.living_room
+      to: auto
+
+    - trigger: state
+      entity_id: climate.living_room
+      attribute: current_temperature
+
+    - trigger: state
+      entity_id: weather.home
+      attribute: temperature
+
+    # Safety/regulation check only.
+    # This is NOT a MELCloud forced-refresh command.
+    - trigger: time_pattern
+      minutes: "/5"
+
+  conditions:
+    - condition: state
+      entity_id: climate.living_room
+      state:
+        - heat
+        - cool
+        - auto
+
+  actions:
+    - variables:
+        calculated_target: |
+          {% set mode = states('climate.living_room') %}
+          {% set desired_raw = states('input_number.desired_temperature_living_room') %}
+          {% set external_raw = states('sensor.living_room_temperature_average') %}
+          {% set internal = state_attr('climate.living_room', 'current_temperature') %}
+          {% set min_raw = state_attr('climate.living_room', 'min_temp') %}
+          {% set max_raw = state_attr('climate.living_room', 'max_temp') %}
+          {% set min_temp = (min_raw | float) if is_number(min_raw) else 16.0 %}
+          {% set max_temp = (max_raw | float) if is_number(max_raw) else 30.0 %}
+
+          {% if not is_number(desired_raw) %}
+            {{ none }}
+          {% else %}
+            {% set desired = desired_raw | float %}
+            {% set result = none %}
+
+            {% if mode == 'auto' %}
+              {% if is_number(external_raw) and is_number(internal) %}
+                {% set external = external_raw | float %}
+                {% set outside_raw = state_attr('weather.home', 'temperature') %}
+                {% set error = external - desired %}
+
+                {# Default neutral zone: desired +/-0.25 C #}
+                {% set heat_threshold = -0.25 %}
+                {% set cool_threshold = 0.25 %}
+
+                {% if is_number(outside_raw) %}
+                  {% set outside = outside_raw | float %}
+
+                  {% if outside >= (desired + 0.5) %}
+                    {# Warm outside: delay heating, allow cooling a little earlier. #}
+                    {% set heat_threshold = -0.5 %}
+                    {% set cool_threshold = 0.25 %}
+
+                  {% elif outside <= (desired - 0.5) %}
+                    {# Cold outside: allow heating earlier, delay cooling. #}
+                    {% set heat_threshold = -0.25 %}
+                    {% set cool_threshold = 0.5 %}
+                  {% endif %}
+                {% endif %}
+
+                {% if error >= heat_threshold and error <= cool_threshold %}
+                  {# Neutral: do not deliberately provoke HEAT or COOL. #}
+                  {% set result = internal | float %}
+                {% else %}
+                  {% set limited_error = [[error, -3.0] | max, 3.0] | min %}
+                  {% set result = (internal | float) - limited_error %}
+                {% endif %}
+              {% endif %}
+
+            {% elif mode in ['heat', 'cool'] %}
+              {% if is_number(external_raw) %}
+                {% set external = external_raw | float %}
+                {% set error = external - desired %}
+                {% set limited_error = [[error, -3.0] | max, 3.0] | min %}
+                {% set result = desired - limited_error %}
+              {% else %}
+                {# Safe fallback in fixed HEAT/COOL. #}
+                {% set result = desired %}
+              {% endif %}
+            {% endif %}
+
+            {% if result is not none %}
+              {% set clamped = [[result, min_temp] | max, max_temp] | min %}
+              {% set rounded = ((clamped * 2) | round) / 2 %}
+              {{ [[rounded, min_temp] | max, max_temp] | min }}
+            {% else %}
+              {{ none }}
+            {% endif %}
+          {% endif %}
+
+    - choose:
+        - conditions:
+            - condition: template
+              value_template: >
+                {{ calculated_target not in [none, 'None', 'unknown', 'unavailable', ''] }}
+
+            - condition: template
+              value_template: |
+                {% set last = states('input_number.last_automatic_target_living_room') %}
+                {% set device_target = state_attr('climate.living_room', 'temperature') %}
+                {{ last in ['unknown', 'unavailable', none]
+                   or (calculated_target | float(0) - (last | float(0))) | abs > 0.01
+                   or (is_number(device_target)
+                       and (calculated_target | float(0) - (device_target | float(0))) | abs > 0.01) }}
+
+          sequence:
+            - action: input_number.set_value
+              target:
+                entity_id: input_number.last_automatic_target_living_room
+              data:
+                value: "{{ calculated_target }}"
+
+            - action: climate.set_temperature
+              target:
+                entity_id: climate.living_room
+              data:
+                temperature: "{{ calculated_target }}"
+
+
+- id: melcloud_home_living_room_manual_target_sync
+  alias: "MELCloud Home: Living room manual target sync"
+  description: >
+    Copies a genuine manual/App/voice target-temperature change into the desired
+    temperature helper while ignoring the target last written by this automation.
+  mode: single
+
+  triggers:
+    - trigger: state
+      entity_id: climate.living_room
+      attribute: temperature
+
+  conditions:
+    - condition: template
+      value_template: |
+        {% set target = state_attr('climate.living_room', 'temperature') %}
+        {% set automatic = states('input_number.last_automatic_target_living_room') %}
+        {% set desired = states('input_number.desired_temperature_living_room') %}
+        {{ target is not none
+           and automatic not in ['unknown', 'unavailable', none]
+           and desired not in ['unknown', 'unavailable', none]
+           and (target | float(22) - automatic | float(22)) | abs > 0.01
+           and (target | float(22) - desired | float(22)) | abs > 0.01 }}
+
+  actions:
+    - action: input_number.set_value
+      target:
+        entity_id: input_number.desired_temperature_living_room
+      data:
+        value: "{{ state_attr('climate.living_room', 'temperature') | float(22) }}"
+
+
+- id: melcloud_home_bedroom_external_temperature
+  alias: "MELCloud Home: Bedroom external-temperature control"
+  description: >
+    Same external-sensor compensation principle for a room with one external
+    temperature sensor. Native Mitsubishi AUTO is represented by auto.
+  mode: restart
+
+  triggers:
+    - trigger: state
+      entity_id: input_number.desired_temperature_bedroom
+
+    - trigger: state
+      entity_id: sensor.bedroom_temperature
+
+    - trigger: state
+      entity_id: climate.bedroom
+      to: heat
+
+    - trigger: state
+      entity_id: climate.bedroom
+      to: cool
+
+    - trigger: state
+      entity_id: climate.bedroom
+      to: auto
+
+    - trigger: state
+      entity_id: climate.bedroom
+      attribute: current_temperature
+
+    - trigger: state
+      entity_id: weather.home
+      attribute: temperature
+
+    - trigger: time_pattern
+      minutes: "/5"
+
+  conditions:
+    - condition: state
+      entity_id: climate.bedroom
+      state:
+        - heat
+        - cool
+        - auto
+
+  actions:
+    - variables:
+        calculated_target: |
+          {% set mode = states('climate.bedroom') %}
+          {% set desired_raw = states('input_number.desired_temperature_bedroom') %}
+          {% set external_raw = states('sensor.bedroom_temperature') %}
+          {% set internal = state_attr('climate.bedroom', 'current_temperature') %}
+          {% set min_raw = state_attr('climate.bedroom', 'min_temp') %}
+          {% set max_raw = state_attr('climate.bedroom', 'max_temp') %}
+          {% set min_temp = (min_raw | float) if is_number(min_raw) else 16.0 %}
+          {% set max_temp = (max_raw | float) if is_number(max_raw) else 30.0 %}
+
+          {% if not is_number(desired_raw) %}
+            {{ none }}
+          {% else %}
+            {% set desired = desired_raw | float %}
+            {% set result = none %}
+
+            {% if mode == 'auto' %}
+              {% if is_number(external_raw) and is_number(internal) %}
+                {% set external = external_raw | float %}
+                {% set outside_raw = state_attr('weather.home', 'temperature') %}
+                {% set error = external - desired %}
+
+                {% set heat_threshold = -0.25 %}
+                {% set cool_threshold = 0.25 %}
+
+                {% if is_number(outside_raw) %}
+                  {% set outside = outside_raw | float %}
+
+                  {% if outside >= (desired + 0.5) %}
+                    {% set heat_threshold = -0.5 %}
+                    {% set cool_threshold = 0.25 %}
+                  {% elif outside <= (desired - 0.5) %}
+                    {% set heat_threshold = -0.25 %}
+                    {% set cool_threshold = 0.5 %}
+                  {% endif %}
+                {% endif %}
+
+                {% if error >= heat_threshold and error <= cool_threshold %}
+                  {% set result = internal | float %}
+                {% else %}
+                  {% set limited_error = [[error, -3.0] | max, 3.0] | min %}
+                  {% set result = (internal | float) - limited_error %}
+                {% endif %}
+              {% endif %}
+
+            {% elif mode in ['heat', 'cool'] %}
+              {% if is_number(external_raw) %}
+                {% set external = external_raw | float %}
+                {% set error = external - desired %}
+                {% set limited_error = [[error, -3.0] | max, 3.0] | min %}
+                {% set result = desired - limited_error %}
+              {% else %}
+                {% set result = desired %}
+              {% endif %}
+            {% endif %}
+
+            {% if result is not none %}
+              {% set clamped = [[result, min_temp] | max, max_temp] | min %}
+              {% set rounded = ((clamped * 2) | round) / 2 %}
+              {{ [[rounded, min_temp] | max, max_temp] | min }}
+            {% else %}
+              {{ none }}
+            {% endif %}
+          {% endif %}
+
+    - choose:
+        - conditions:
+            - condition: template
+              value_template: >
+                {{ calculated_target not in [none, 'None', 'unknown', 'unavailable', ''] }}
+
+            - condition: template
+              value_template: |
+                {% set last = states('input_number.last_automatic_target_bedroom') %}
+                {% set device_target = state_attr('climate.bedroom', 'temperature') %}
+                {{ last in ['unknown', 'unavailable', none]
+                   or (calculated_target | float(0) - (last | float(0))) | abs > 0.01
+                   or (is_number(device_target)
+                       and (calculated_target | float(0) - (device_target | float(0))) | abs > 0.01) }}
+
+          sequence:
+            - action: input_number.set_value
+              target:
+                entity_id: input_number.last_automatic_target_bedroom
+              data:
+                value: "{{ calculated_target }}"
+
+            - action: climate.set_temperature
+              target:
+                entity_id: climate.bedroom
+              data:
+                temperature: "{{ calculated_target }}"
+
+
+- id: melcloud_home_bedroom_manual_target_sync
+  alias: "MELCloud Home: Bedroom manual target sync"
+  description: >
+    Copies a genuine manual/App/voice target-temperature change into the desired
+    temperature helper while ignoring the target last written automatically.
+  mode: single
+
+  triggers:
+    - trigger: state
+      entity_id: climate.bedroom
+      attribute: temperature
+
+  conditions:
+    - condition: template
+      value_template: |
+        {% set target = state_attr('climate.bedroom', 'temperature') %}
+        {% set automatic = states('input_number.last_automatic_target_bedroom') %}
+        {% set desired = states('input_number.desired_temperature_bedroom') %}
+        {{ target is not none
+           and automatic not in ['unknown', 'unavailable', none]
+           and desired not in ['unknown', 'unavailable', none]
+           and (target | float(22) - automatic | float(22)) | abs > 0.01
+           and (target | float(22) - desired | float(22)) | abs > 0.01 }}
+
+  actions:
+    - action: input_number.set_value
+      target:
+        entity_id: input_number.desired_temperature_bedroom
+      data:
+        value: "{{ state_attr('climate.bedroom', 'temperature') | float(22) }}"
+
+
+- id: melcloud_home_optional_horizontal_swing
+  alias: "MELCloud Home: Optional horizontal swing"
+  description: >
+    Optional example for MELCloud Home devices that expose named horizontal vane
+    modes. Uses swing while the room error is large and centre near the target.
+    Check your own entity's swing_horizontal_modes before enabling.
+  mode: restart
+
+  triggers:
+    - trigger: template
+      id: swing
+      value_template: |
+        {% set room_raw = states('sensor.living_room_temperature_average') %}
+        {% set desired_raw = states('input_number.desired_temperature_living_room') %}
+        {{ states('climate.living_room') in ['heat', 'cool', 'auto']
+           and is_number(room_raw)
+           and is_number(desired_raw)
+           and ((room_raw | float) - (desired_raw | float)) | abs >= 0.7 }}
+      for:
+        minutes: 1
+
+    - trigger: template
+      id: centre
+      value_template: |
+        {% set room_raw = states('sensor.living_room_temperature_average') %}
+        {% set desired_raw = states('input_number.desired_temperature_living_room') %}
+        {{ states('climate.living_room') in ['heat', 'cool', 'auto']
+           and is_number(room_raw)
+           and is_number(desired_raw)
+           and ((room_raw | float) - (desired_raw | float)) | abs <= 0.3 }}
+      for:
+        minutes: 1
+
+  conditions: []
+
+  actions:
+    - choose:
+        - conditions:
+            - condition: trigger
+              id: swing
+            - condition: template
+              value_template: >
+                {{ state_attr('climate.living_room', 'swing_horizontal_mode') != 'swing' }}
+          sequence:
+            - action: climate.set_swing_horizontal_mode
+              target:
+                entity_id: climate.living_room
+              data:
+                swing_horizontal_mode: swing
+
+        - conditions:
+            - condition: trigger
+              id: centre
+            - condition: template
+              value_template: >
+                {{ state_attr('climate.living_room', 'swing_horizontal_mode') != 'centre' }}
+          sequence:
+            - action: climate.set_swing_horizontal_mode
+              target:
+                entity_id: climate.living_room
+              data:
+                swing_horizontal_mode: centre
