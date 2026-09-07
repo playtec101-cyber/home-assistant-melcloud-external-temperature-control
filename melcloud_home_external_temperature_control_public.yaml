@@ -1,222 +1,1118 @@
 # =============================================================================
-# MELCloud Home – External Room Temperature Control – Public / Sanitized Example
-# Updated: 2026-09-06
+# MELCloud Home – ÖFFENTLICHE / NEUTRALE BEISPIELKONFIGURATION
+# AUTO-Korrekturstufen bis +/-3,0 °C, gemeinsame Neutralzone +/-0,25 °C
+# Variante: mit optionaler automatischer horizontaler Lamellensteuerung
+# Stand: 07.09.2026
+# =============================================================================
 #
-# PURPOSE
-# -------
-# Use an external room sensor as the real comfort reference while keeping the
-# user-selected Mitsubishi HVAC mode unchanged:
-#   AUTO stays AUTO
-#   HEAT stays HEAT
-#   COOL stays COOL
+# ZWECK
+# Diese Datei ist eine veröffentlichbare Home-Assistant-Beispielkonfiguration.
+# Sie enthält absichtlich nur neutrale Platzhalter-Entity-IDs und keine
+# IP-Adressen, Hostnamen, Kontodaten oder sonstigen installationsbezogenen Daten.
 #
-# Home Assistant cannot write a fake current_temperature to MELCloud Home.
-# Instead it applies a virtual room-temperature offset by shifting the device
-# target temperature.
+# WICHTIG VOR DER VERWENDUNG
+# Die folgenden Entity-IDs sind BEISPIELE und müssen an die eigene Installation
+# angepasst bzw. als Helper angelegt werden. Nicht blind 1:1 übernehmen.
 #
-# AUTO MODE
-# ---------
-# error = external_room_temperature - desired_room_temperature
-# virtual_error = error * 1.5
-# device_target = device_internal_temperature - virtual_error
+# Primäre Klimageräte / Raumreferenzen:
+#   climate.hauptraum_ac
+#   climate.nebenraum_ac
+#   sensor.hauptraum_referenztemperatur
+#   sensor.nebenraum_referenztemperatur
 #
-# HEAT / COOL MODE
-# ----------------
-# factor = 1.0
+# Wunschtemperaturen / gespeicherte zuletzt automatisch gesetzte Geräteziele:
+#   input_number.wunschtemperatur_hauptraum
+#   input_number.wunschtemperatur_nebenraum
+#   input_number.letzte_automatische_zieltemperatur_hauptraum
+#   input_number.letzte_automatische_zieltemperatur_nebenraum
 #
-# NEUTRAL ZONE
-# ------------
-# If the real room is within +/-0.25 C of the desired temperature, correction
-# is set to zero so the Mitsubishi can reduce output naturally.
+# Optionale Zusatzheizungen:
+#   climate.zusatzheizung_1
+#   climate.zusatzheizung_2
+#   input_boolean.zusatzheizung_freigabe_hauptraum
 #
-# SAFETY / STABILITY
-# ------------------
-# - correction is limited to +/-3 C
-# - result is rounded to 0.5 C
-# - duplicate cloud writes are suppressed using a helper storing the last
-#   automatic target sent
-# - a 5-minute retry is kept for cases where MELCloud Home did not confirm the
-#   requested target
+# Optionaler separater Zusatzheizer:
+#   switch.zusatzheizer_strom
+#   sensor.zusatzheizer_referenztemperatur
+#   input_boolean.zusatzheizer_automatisch
+#   input_datetime.zusatzheizer_manuell_bis
 #
-# REQUIRED HELPERS
-# ----------------
-# input_number.living_room_desired_temperature
-# input_number.living_room_last_automatic_target
-# input_number.bedroom_desired_temperature
-# input_number.bedroom_last_automatic_target
+# Weitere Helper / Sensoren:
+#   input_boolean.abwesenheit
+#   weather.home
 #
-# REPLACE THESE EXAMPLE ENTITY IDS
-# --------------------------------
-# climate.living_room_heat_pump
-# sensor.living_room_external_temperature
-# climate.bedroom_heat_pump
-# sensor.bedroom_external_temperature
+# REGELLOGIK DER MELCLOUD-KLIMAGERÄTE
+# Abweichung = externe Raumtemperatur - Wunschtemperatur
+#   |Abweichung| <= 0,25 °C       -> Korrektur 0,0 °C
+#   0,25 < |Abweichung| <= 0,75  -> Korrektur +/-0,5 °C
+#   0,75 < |Abweichung| <= 1,25  -> Korrektur +/-1,0 °C
+#   1,25 < |Abweichung| <= 1,75  -> Korrektur +/-1,5 °C
+#   1,75 < |Abweichung| <= 2,25  -> Korrektur +/-2,0 °C
+#   2,25 < |Abweichung| <= 2,75  -> Korrektur +/-2,5 °C
+#   |Abweichung| > 2,75 °C       -> Korrektur +/-3,0 °C
 #
-# OPTIONAL
-# --------
-# The third automation is an optional horizontal swing example. Delete it if
-# you do not want Home Assistant to control horizontal vanes.
+# In HEAT und COOL gilt dieselbe Neutralzone von +/-0,25 °C; außerhalb der
+# Neutralzone wird linear 1:1 korrigiert. AUTO verwendet bewusst feste 0,5-°C-
+# Stufen, passend zur typischen Sollwertauflösung der Mitsubishi-Geräte.
 #
-# IMPORTANT
-# ---------
-# This public example intentionally does NOT include installation-specific
-# radiator, auxiliary-heater, vacation, weather-lockout or household logic.
-# Keep those separate from the generic MELCloud Home control example.
+# ZUSATZFUNKTIONEN IN DIESER DATEI
+#   - 25-Minuten-Freigabe für zwei optionale Zusatzheizungen bei Heizbedarf
+#   - Außenkontrolle und Sommersperre
+#   - separater Zeitplan, wenn die Hauptklima ausgeschaltet ist
+#   - Abwesenheits-/Sicherheitsabschaltungen
+#   - separater Zusatzheizer mit Referenzsensor und manueller 4-Stunden-Grenze
+#   - optionale horizontale Swing-Automatik im Hauptraum
+#   - Rückübernahme echter Sollwertänderungen aus MELCloud/MELCloud Home/App/Sprachsteuerung
+#     in den Wunschtemperatur-Helper; automatische Kompensationswerte werden herausgefiltert
+#
+# HINWEIS
+# Die Temperaturgrenzen (z. B. 15 °C / 20 °C außen, 20,5 °C Tagesziel,
+# 16 °C Nachtziel und die Hysteresen) sind Beispielwerte dieser Vorlage.
+# Vor der Übernahme sollten diese Werte geprüft und bei Bedarf an die eigene
+# Anlage, den Raum und das gewünschte Komfortverhalten angepasst werden.
 # =============================================================================
 
-- id: melcloud_home_living_room_external_reference
-  alias: 'MELCloud Home: Living room external temperature reference'
-  description: Keeps the user-selected HVAC mode unchanged (AUTO stays AUTO, HEAT stays HEAT, COOL stays COOL) and adjusts only the Mitsubishi target temperature. In AUTO mode the external room error is multiplied by 1.5 so the unit does not reduce output too early while the real room is still away from the desired temperature. Within +/-0.25 C of the desired room temperature, the offset is set to zero.
+# -----------------------------------------------------------------------------
+# 1) HAUPTRAUM: MELCloud-Hauptregelung
+# Nutzt einen externen Raumtemperatursensor als Referenz, verändert aber nicht
+# den vom Benutzer gewählten HVAC-Modus (AUTO/HEAT/COOL).
+# -----------------------------------------------------------------------------
+
+- id: melcloud_hauptraum_hauptsteuerung
+  alias: 'MELCloud Hauptraum: Hauptsteuerung mit externer Raumreferenz'
+  description: 'Regelt den MELCloud-Sollwert anhand einer externen Referenztemperatur. In AUTO werden feste 0,5-°C-Korrekturstufen bis maximal +/-3,0 °C verwendet; in HEAT und COOL wird außerhalb der gemeinsamen Neutralzone von +/-0,25 °C linear 1:1 korrigiert. Der vom Benutzer gewählte HVAC-Modus bleibt unverändert. Eine separate Rücksynchronisierung übernimmt echte Sollwertänderungen aus MELCloud/App/Sprachsteuerung als neuen Wunschwert.'
   mode: restart
   triggers:
   - trigger: state
-    entity_id: input_number.living_room_desired_temperature
-    id: desired
+    entity_id: input_number.wunschtemperatur_hauptraum
+    id: wunsch
   - trigger: state
-    entity_id: sensor.living_room_external_temperature
-    id: external
+    entity_id: sensor.hauptraum_referenztemperatur
+    id: raum
   - trigger: state
-    entity_id: climate.living_room_heat_pump
+    entity_id: climate.hauptraum_ac
     attribute: current_temperature
-    id: internal
+    id: geraet_ist
   - trigger: state
-    entity_id: climate.living_room_heat_pump
+    entity_id: climate.hauptraum_ac
     to: auto
-    id: mode_auto
+    id: modus_auto
   - trigger: state
-    entity_id: climate.living_room_heat_pump
+    entity_id: climate.hauptraum_ac
     to: heat
-    id: mode_heat
+    id: modus_heat
   - trigger: state
-    entity_id: climate.living_room_heat_pump
+    entity_id: climate.hauptraum_ac
     to: cool
-    id: mode_cool
+    id: modus_cool
   - trigger: time_pattern
     minutes: /5
-    id: safety_retry
+    id: sicherheitspruefung
+  - trigger: state
+    entity_id: input_boolean.abwesenheit
+    to: 'off'
+    id: abwesenheit_aus
   conditions:
   - condition: state
-    entity_id: climate.living_room_heat_pump
+    entity_id: input_boolean.abwesenheit
+    state: 'off'
+  - condition: state
+    entity_id: climate.hauptraum_ac
     state:
     - auto
     - heat
     - cool
   action:
   - variables:
-      target_temperature: "{% set desired_raw = states('input_number.living_room_desired_temperature') %}\n{% set external_raw = states('sensor.living_room_external_temperature') %}\n{% set internal = state_attr('climate.living_room_heat_pump', 'current_temperature') %}\n{% set mode = states('climate.living_room_heat_pump') %}\n{% set min_raw = state_attr('climate.living_room_heat_pump', 'min_temp') %}\n{% set max_raw = state_attr('climate.living_room_heat_pump', 'max_temp') %}\n{% set min_temp = (min_raw | float) if is_number(min_raw) else 16.0 %}\n{% set max_temp = (max_raw | float) if is_number(max_raw) else 30.0 %}\n\n{% if is_number(desired_raw) and is_number(external_raw) and is_number(internal) %}\n  {% set desired = desired_raw | float %}\n  {% set external = external_raw | float %}\n  {% set internal_temp = internal | float %}\n  {% set error = external - desired %}\n\n  {% if (error | abs) <= 0.25 %}\n    {% set correction = 0.0 %}\n  {% else %}\n    {% set factor = 1.5 if mode\
-        \ == 'auto' else 1.0 %}\n    {% set raw_correction = error * factor %}\n    {% set correction = [[raw_correction, -3.0] | max, 3.0] | min %}\n  {% endif %}\n\n  {% set calculated = internal_temp - correction %}\n  {% set clamped = [[calculated, min_temp] | max, max_temp] | min %}\n  {% set rounded = ((clamped * 2) | round) / 2 %}\n  {{ [[rounded, min_temp] | max, max_temp] | min }}\n{% else %}\n  {{ none }}\n{% endif %}"
+      roh_ziel: >-
+        {% set wunsch_raw = states('input_number.wunschtemperatur_hauptraum') %}
+
+        {% set extern_raw = states('sensor.hauptraum_referenztemperatur') %}
+
+        {% set intern = state_attr('climate.hauptraum_ac', 'current_temperature') %}
+
+        {% set modus = states('climate.hauptraum_ac') %}
+
+        {% set min_raw = state_attr('climate.hauptraum_ac', 'min_temp') %}
+
+        {% set max_raw = state_attr('climate.hauptraum_ac', 'max_temp') %}
+
+        {% set min_temp = (min_raw | float) if is_number(min_raw) else 16.0 %}
+
+        {% set max_temp = (max_raw | float) if is_number(max_raw) else 30.0 %}
+
+
+        {% if is_number(wunsch_raw) and is_number(extern_raw) and is_number(intern) %}
+          {% set wunsch = wunsch_raw | float %}
+          {% set extern = extern_raw | float %}
+          {% set intern_temp = intern | float %}
+          {% set fehler = extern - wunsch %}
+          {% set abs_f = fehler | abs %}
+
+          {# Gemeinsame Neutralzone fuer AUTO, HEAT und COOL. #}
+          {% if abs_f <= 0.25 %}
+            {% set korr = 0.0 %}
+          {% elif modus in ['heat', 'cool'] %}
+            {# HEAT/COOL bleiben ausserhalb der Neutralzone linear 1:1. #}
+            {% set korr = fehler %}
+          {% else %}
+            {# AUTO arbeitet bewusst in den 0,5-Grad-Stufen der Mitsubishi-Hardware, bis maximal +/-3,0°C. #}
+            {% if abs_f <= 0.75 %}
+              {% set korr = 0.5 if fehler > 0 else -0.5 %}
+            {% elif abs_f <= 1.25 %}
+              {% set korr = 1.0 if fehler > 0 else -1.0 %}
+            {% elif abs_f <= 1.75 %}
+              {% set korr = 1.5 if fehler > 0 else -1.5 %}
+            {% elif abs_f <= 2.25 %}
+              {% set korr = 2.0 if fehler > 0 else -2.0 %}
+            {% elif abs_f <= 2.75 %}
+              {% set korr = 2.5 if fehler > 0 else -2.5 %}
+            {% else %}
+              {% set korr = 3.0 if fehler > 0 else -3.0 %}
+            {% endif %}
+          {% endif %}
+
+          {% set berechnet = intern_temp - korr %}
+          {% set geklemmt = [[berechnet, min_temp] | max, max_temp] | min %}
+          {% set gerundet = ((geklemmt * 2) | round) / 2 %}
+          {{ [[gerundet, min_temp] | max, max_temp] | min }}
+        {% else %}
+          {{ none }}
+        {% endif %}
   - choose:
     - conditions:
       - condition: template
-        value_template: '{{ target_temperature not in [none, ''None'', ''unknown'', ''unavailable'', ''''] }}'
+        value_template: '{{ roh_ziel not in [none, ''None'', ''unknown'', ''unavailable'', ''''] }}'
       - condition: template
-        value_template: "{% set last = states('input_number.living_room_last_automatic_target') %}\n{% set device_target = state_attr('climate.living_room_heat_pump', 'temperature') %}\n{% set target_changed = last in ['unknown', 'unavailable', none]\n   or (target_temperature | float(0) - (last | float(0))) | abs > 0.01 %}\n{% set mode_changed = trigger.id in ['mode_auto', 'mode_heat', 'mode_cool'] %}\n{% set retry_needed = trigger.id == 'safety_retry'\n   and is_number(device_target)\n   and (target_temperature | float(0) - (device_target | float(0))) | abs > 0.01 %}\n{{ target_changed or mode_changed or retry_needed }}"
+        value_template: '{% set letzte = states(''input_number.letzte_automatische_zieltemperatur_hauptraum'') %}
+
+          {% set geraet = state_attr(''climate.hauptraum_ac'', ''temperature'') %}
+
+          {% set ziel_geaendert = letzte in [''unknown'', ''unavailable'', none] or (roh_ziel | float(0) - (letzte | float(0))) | abs > 0.01 %}
+
+          {% set modus_neu = trigger.id in [''modus_auto'', ''modus_heat'', ''modus_cool''] %}
+
+          {% set sicherheits_retry = trigger.id == ''sicherheitspruefung'' and is_number(geraet) and (roh_ziel | float(0) - (geraet | float(0))) | abs > 0.01 %}
+
+          {{ ziel_geaendert or modus_neu or sicherheits_retry }}'
       sequence:
-      - action: climate.set_temperature
-        target:
-          entity_id: climate.living_room_heat_pump
-        data:
-          temperature: '{{ target_temperature }}'
+      # Das automatische Ziel wird VOR dem Cloud-Befehl gespeichert.
+      # Dadurch kann die folgende Rücksynchronisierung erkennen, dass die
+      # anschließende Sollwertänderung von dieser Automation selbst stammt.
       - action: input_number.set_value
         target:
-          entity_id: input_number.living_room_last_automatic_target
+          entity_id: input_number.letzte_automatische_zieltemperatur_hauptraum
         data:
-          value: '{{ target_temperature }}'
-- id: melcloud_home_bedroom_external_reference
-  alias: 'MELCloud Home: Bedroom external temperature reference'
-  description: Same external-temperature offset logic as the living room. AUTO remains AUTO; HEAT remains HEAT; COOL remains COOL.
+          value: '{{ roh_ziel }}'
+      - action: climate.set_temperature
+        target:
+          entity_id: climate.hauptraum_ac
+        data:
+          temperature: '{{ roh_ziel }}'
+# -----------------------------------------------------------------------------
+# 2) HAUPTRAUM: Benutzer-Sollwert aus MELCloud/App/Sprachsteuerung übernehmen
+# Diese Automation macht die Bedienwege bidirektional:
+# Ein echter Benutzerbefehl am MELCloud-Gerätesoll wird zum neuen Raum-Wunschwert.
+# Von der Regelung selbst gesetzte Kompensations-Sollwerte werden herausgefiltert.
+# -----------------------------------------------------------------------------
+- id: melcloud_hauptraum_benutzer_sollwert_sync
+  alias: 'MELCloud Hauptraum: Benutzer-Sollwert als Wunsch übernehmen'
+  description: 'Übernimmt echte Sollwertänderungen, die über MELCloud/MELCloud Home, eine unterstützte App oder eine daran gekoppelte Sprachsteuerung eintreffen, in den Wunschtemperatur-Helper. Automatisch von dieser Vorlage gesetzte Kompensations-Sollwerte werden anhand des Helpers letzte_automatische_zieltemperatur_hauptraum erkannt und nicht zurückgeschrieben.'
   mode: restart
   triggers:
   - trigger: state
-    entity_id: input_number.bedroom_desired_temperature
-    id: desired
-  - trigger: state
-    entity_id: sensor.bedroom_external_temperature
-    id: external
-  - trigger: state
-    entity_id: climate.bedroom_heat_pump
-    attribute: current_temperature
-    id: internal
-  - trigger: state
-    entity_id: climate.bedroom_heat_pump
-    to: auto
-    id: mode_auto
-  - trigger: state
-    entity_id: climate.bedroom_heat_pump
-    to: heat
-    id: mode_heat
-  - trigger: state
-    entity_id: climate.bedroom_heat_pump
-    to: cool
-    id: mode_cool
-  - trigger: time_pattern
-    minutes: /5
-    id: safety_retry
+    entity_id: climate.hauptraum_ac
+    attribute: temperature
+    id: geraet_soll_geaendert
   conditions:
   - condition: state
-    entity_id: climate.bedroom_heat_pump
+    entity_id: input_boolean.abwesenheit
+    state: 'off'
+  - condition: template
+    value_template: >-
+      {% set neu = trigger.to_state.attributes.get('temperature') if trigger.to_state is not none else none %}
+      {% set letzte_auto = states('input_number.letzte_automatische_zieltemperatur_hauptraum') %}
+      {% set wunsch = states('input_number.wunschtemperatur_hauptraum') %}
+      {{ is_number(neu)
+         and is_number(letzte_auto)
+         and is_number(wunsch)
+         and ((neu | float) - (letzte_auto | float)) | abs > 0.01
+         and ((neu | float) - (wunsch | float)) | abs > 0.01 }}
+  action:
+  - action: input_number.set_value
+    target:
+      entity_id: input_number.wunschtemperatur_hauptraum
+    data:
+      value: "{{ trigger.to_state.attributes.get('temperature') | float }}"
+
+# -----------------------------------------------------------------------------
+# 3) ZUSATZHEIZUNG: Freigabe nach dauerhaftem Heizbedarf
+# Erst wenn der Hauptraum 25 Minuten lang mindestens 0,5 °C unter Wunsch liegt
+# und die Außenbedingungen passen, wird die Freigabe aktiviert.
+# -----------------------------------------------------------------------------
+- id: zusatzheizung_freigabe_hauptraum
+  alias: 'Zusatzheizung: Freigabe für Hauptraum mit Außenkontrolle'
+  description: 'Aktiviert die Freigabe für zwei optionale Zusatzheizungen erst nach 25 Minuten dauerhaftem Heizbedarf. Voraussetzung: HEAT oder AUTO ist aktiv, die externe Raumreferenz liegt mindestens 0,5 °C unter Wunsch, die Außentemperatur liegt höchstens bei 20 °C und ist nicht wärmer als der Innenraum. Ein separater Zusatzheizer wird unabhängig davon geregelt.'
+  mode: single
+  triggers:
+  - trigger: template
+    id: zusatzheizbedarf_25min
+    value_template: "{% set innen_raw = states('sensor.hauptraum_referenztemperatur') %}\n{% set wunsch_raw = states('input_number.wunschtemperatur_hauptraum') %}\n{% set aussen_raw = state_attr('weather.home', 'temperature') %}\n{{ states('climate.hauptraum_ac') in ['heat', 'auto']\n   and is_number(innen_raw)\n   and is_number(wunsch_raw)\n   and is_number(aussen_raw)\n   and (innen_raw | float) <= ((wunsch_raw | float) - 0.5)\n   and (aussen_raw | float) <= 20.0\n   and (aussen_raw | float) <= (innen_raw | float) }}"
+    for:
+      hours: 0
+      minutes: 25
+      seconds: 0
+  conditions:
+  - condition: state
+    entity_id: input_boolean.abwesenheit
+    state: 'off'
+  - condition: state
+    entity_id: input_boolean.zusatzheizung_freigabe_hauptraum
+    state: 'off'
+  action:
+  - action: input_boolean.turn_on
+    target:
+      entity_id: input_boolean.zusatzheizung_freigabe_hauptraum
+# -----------------------------------------------------------------------------
+# 4) ZUSATZHEIZUNG: Freigabe wieder entziehen
+# Beendet die Freigabe bei fehlendem Heizbedarf, ungeeigneter Außentemperatur,
+# ungültigen Messwerten, Moduswechsel oder aktiver Abwesenheit.
+# -----------------------------------------------------------------------------
+- id: zusatzheizung_freigabe_hauptraum_beenden
+  alias: 'Zusatzheizung: Freigabe für Hauptraum beenden'
+  description: 'Entzieht die Zusatzheizungs-Freigabe, wenn HEAT/AUTO verlassen wird, Abwesenheit aktiv ist, Messwerte ungültig werden, die Außentemperatur über 20 °C steigt, die Außenluft wärmer als der Innenraum wird oder die Raumreferenz Wunsch + 0,5 °C erreicht.'
+  mode: restart
+  triggers:
+  - trigger: state
+    entity_id: climate.hauptraum_ac
+    id: klima
+  - trigger: state
+    entity_id: sensor.hauptraum_referenztemperatur
+    id: innen
+  - trigger: state
+    entity_id: input_number.wunschtemperatur_hauptraum
+    id: wunsch
+  - trigger: state
+    entity_id: weather.home
+    attribute: temperature
+    id: aussen
+  - trigger: state
+    entity_id: input_boolean.abwesenheit
+    to: 'on'
+    id: abwesenheit
+  - trigger: homeassistant
+    event: start
+    id: ha_start
+  conditions:
+  - condition: state
+    entity_id: input_boolean.zusatzheizung_freigabe_hauptraum
+    state: 'on'
+  - condition: template
+    value_template: "{% set modus = states('climate.hauptraum_ac') %}\n{% set innen_raw = states('sensor.hauptraum_referenztemperatur') %}\n{% set wunsch_raw = states('input_number.wunschtemperatur_hauptraum') %}\n{% set aussen_raw = state_attr('weather.home', 'temperature') %}\n{{ is_state('input_boolean.abwesenheit', 'on')\n   or modus not in ['heat', 'auto']\n   or not is_number(innen_raw)\n   or not is_number(wunsch_raw)\n   or not is_number(aussen_raw)\n   or (aussen_raw | float) > 20.0\n   or (aussen_raw | float) > (innen_raw | float)\n   or (innen_raw | float) >= ((wunsch_raw | float) + 0.5) }}"
+  action:
+  - action: input_boolean.turn_off
+    target:
+      entity_id: input_boolean.zusatzheizung_freigabe_hauptraum
+# -----------------------------------------------------------------------------
+# 5) ZUSATZHEIZUNG: Zwei Thermostate synchronisieren
+# Setzt beide Zusatzheizungen bei gültiger Freigabe auf HEAT und auf einen
+# gegenüber dem Hauptwunsch abgesenkten Sollwert. Ohne Freigabe gilt Nacht/AUS.
+# -----------------------------------------------------------------------------
+- id: zusatzheizung_hauptraum_synchronisieren
+  alias: 'Zusatzheizung: Freigabe und Sollwert synchronisieren'
+  description: 'Synchronisiert zwei optionale climate-Thermostate mit der Hauptraum-Regelung. Bei gültiger Freigabe laufen beide in HEAT mit Wunsch minus 1,5 °C. Ohne Freigabe werden sie nachts auf 16 °C gehalten und tagsüber auf AUS/10 °C gesetzt. Ist die Hauptklima ausgeschaltet, übernimmt der separate Tag-/Nacht-Zeitplan.'
+  mode: restart
+  triggers:
+  - trigger: state
+    entity_id: input_number.wunschtemperatur_hauptraum
+    id: wunsch_geaendert
+  - trigger: state
+    entity_id: input_boolean.zusatzheizung_freigabe_hauptraum
+    id: freigabe_geaendert
+  - trigger: state
+    entity_id: climate.hauptraum_ac
+    id: klima_modus_geaendert
+  - trigger: state
+    entity_id: weather.home
+    attribute: temperature
+    id: aussentemperatur_geaendert
+  - trigger: time
+    at: '23:00:00'
+    id: nacht_start
+  - trigger: time
+    at: 08:00:00
+    id: tag_start
+  - trigger: time_pattern
+    minutes: /5
+    id: sicherheitspruefung
+  - trigger: homeassistant
+    event: start
+    id: ha_start
+  - trigger: state
+    entity_id: input_boolean.abwesenheit
+    to: 'off'
+    id: abwesenheit_aus
+  conditions:
+  - condition: state
+    entity_id: input_boolean.abwesenheit
+    state: 'off'
+  - condition: template
+    value_template: '{{ states(''climate.hauptraum_ac'') != ''off'' }}
+
+      '
+  action:
+  - variables:
+      zusatzheizung_ziel: '{% set wunsch = states(''input_number.wunschtemperatur_hauptraum'') | float(22) %}
+
+        {{ ((((wunsch - 1.5) * 2) | round) / 2) }}
+
+        '
+      aussen_raw: '{{ state_attr(''weather.home'', ''temperature'') }}'
+      ist_raw: '{{ states(''sensor.hauptraum_referenztemperatur'') }}'
+      wunsch_raw: '{{ states(''input_number.wunschtemperatur_hauptraum'') }}'
+      zusatzheizung_freigabe_gueltig: "{% set modus = states('climate.hauptraum_ac') %}\n{{ states('input_boolean.zusatzheizung_freigabe_hauptraum') == 'on'\n   and modus in ['heat', 'auto']\n   and is_number(ist_raw)\n   and is_number(wunsch_raw)\n   and is_number(aussen_raw)\n   and (aussen_raw | float) <= 20.0\n   and (aussen_raw | float) <= (ist_raw | float)\n   and (ist_raw | float) < ((wunsch_raw | float) + 0.5) }}"
+      nacht: '{{ now().hour >= 23 or now().hour < 8 }}'
+  - choose:
+    - conditions:
+      - condition: template
+        value_template: '{{ zusatzheizung_freigabe_gueltig | bool }}'
+      - condition: template
+        value_template: "{% set t1 = state_attr('climate.zusatzheizung_1', 'temperature') %}\n{% set t2 = state_attr('climate.zusatzheizung_2', 'temperature') %}\n{{ states('climate.zusatzheizung_1') != 'heat'\n   or states('climate.zusatzheizung_2') != 'heat'\n   or not is_number(t1)\n   or not is_number(t2)\n   or (t1 | float(0) - zusatzheizung_ziel | float(0)) | abs > 0.01\n   or (t2 | float(0) - zusatzheizung_ziel | float(0)) | abs > 0.01 }}\n"
+      sequence:
+      - action: climate.set_hvac_mode
+        target:
+          entity_id:
+          - climate.zusatzheizung_1
+          - climate.zusatzheizung_2
+        data:
+          hvac_mode: heat
+      - action: climate.set_temperature
+        target:
+          entity_id:
+          - climate.zusatzheizung_1
+          - climate.zusatzheizung_2
+        data:
+          temperature: '{{ zusatzheizung_ziel }}'
+    - conditions:
+      - condition: template
+        value_template: '{{ not (zusatzheizung_freigabe_gueltig | bool) and (nacht | bool) }}
+
+          '
+      - condition: template
+        value_template: "{% set t1 = state_attr('climate.zusatzheizung_1', 'temperature') %}\n{% set t2 = state_attr('climate.zusatzheizung_2', 'temperature') %}\n{{ states('climate.zusatzheizung_1') != 'heat'\n   or states('climate.zusatzheizung_2') != 'heat'\n   or not is_number(t1)\n   or not is_number(t2)\n   or (t1 | float(0) - 16.0) | abs > 0.01\n   or (t2 | float(0) - 16.0) | abs > 0.01 }}\n"
+      sequence:
+      - action: climate.set_hvac_mode
+        target:
+          entity_id:
+          - climate.zusatzheizung_1
+          - climate.zusatzheizung_2
+        data:
+          hvac_mode: heat
+      - action: climate.set_temperature
+        target:
+          entity_id:
+          - climate.zusatzheizung_1
+          - climate.zusatzheizung_2
+        data:
+          temperature: 16.0
+    - conditions:
+      - condition: template
+        value_template: '{{ not (zusatzheizung_freigabe_gueltig | bool) and not (nacht | bool) }}
+
+          '
+      - condition: template
+        value_template: "{# is_number verhindert unnötige Wiederholungsbefehle, wenn ein\n   ausgeschalteter Thermostat kein numerisches temperature-Attribut liefert. #}\n{% set t1 = state_attr('climate.zusatzheizung_1', 'temperature') %}\n{% set t2 = state_attr('climate.zusatzheizung_2', 'temperature') %}\n{{ states('climate.zusatzheizung_1') != 'off'\n   or states('climate.zusatzheizung_2') != 'off'\n   or (is_number(t1) and (t1 | float(0) - 10.0) | abs > 0.01)\n   or (is_number(t2) and (t2 | float(0) - 10.0) | abs > 0.01) }}\n"
+      sequence:
+      - action: climate.set_temperature
+        target:
+          entity_id:
+          - climate.zusatzheizung_1
+          - climate.zusatzheizung_2
+        data:
+          temperature: 10.0
+      - action: climate.set_hvac_mode
+        target:
+          entity_id:
+          - climate.zusatzheizung_1
+          - climate.zusatzheizung_2
+        data:
+          hvac_mode: 'off'
+# -----------------------------------------------------------------------------
+# 6) ZUSATZHEIZUNG: Eigener Zeitplan bei ausgeschalteter Hauptklima
+# Wenn das primäre Klimagerät AUS ist, übernimmt Home Assistant einen einfachen
+# Tag-/Nacht-Zeitplan; bei zu warmer Außenluft greift die Sommersperre.
+# -----------------------------------------------------------------------------
+- id: zusatzheizung_zeitplan_bei_hauptklima_aus
+  alias: 'Zusatzheizung: Zeitplan bei Hauptklima AUS mit Sommersperre'
+  description: 'Wenn die Hauptklima AUS ist, übernimmt Home Assistant den Zeitplan der beiden optionalen Zusatzheizungen: 08:00-23:00 Uhr 20,5 °C, 23:00-08:00 Uhr 16,0 °C. Bei ungültiger Außentemperatur oder mehr als 20 °C außen greift die Sommersperre und beide Geräte bleiben AUS/10 °C.'
+  mode: restart
+  triggers:
+  - trigger: state
+    entity_id: climate.hauptraum_ac
+    to: 'off'
+    id: klima_aus
+  - trigger: time
+    at: 08:00:00
+    id: komfort_start
+  - trigger: time
+    at: '23:00:00'
+    id: nacht_start
+  - trigger: state
+    entity_id: weather.home
+    attribute: temperature
+    id: aussen
+  - trigger: state
+    entity_id: input_boolean.abwesenheit
+    to: 'off'
+    id: abwesenheit_aus
+  - trigger: time_pattern
+    minutes: /5
+    id: sicherheitspruefung
+  - trigger: homeassistant
+    event: start
+    id: ha_start
+  conditions:
+  - condition: state
+    entity_id: input_boolean.abwesenheit
+    state: 'off'
+  - condition: state
+    entity_id: climate.hauptraum_ac
+    state: 'off'
+  action:
+  - variables:
+      plan_ziel: "{% if 8 <= now().hour < 23 %}\n  20.5\n{% else %}\n  16.0\n{% endif %}"
+      aussen_raw: '{{ state_attr(''weather.home'', ''temperature'') }}'
+      winter_freigabe: '{{ is_number(aussen_raw) and (aussen_raw | float) <= 20.0 }}'
+  - choose:
+    - conditions:
+      - condition: template
+        value_template: '{{ winter_freigabe | bool }}'
+      - condition: template
+        value_template: "{% set t1 = state_attr('climate.zusatzheizung_1', 'temperature') %}\n{% set t2 = state_attr('climate.zusatzheizung_2', 'temperature') %}\n{{ states('climate.zusatzheizung_1') != 'heat'\n   or states('climate.zusatzheizung_2') != 'heat'\n   or not is_number(t1)\n   or not is_number(t2)\n   or (t1 | float(0) - plan_ziel | float(0)) | abs > 0.01\n   or (t2 | float(0) - plan_ziel | float(0)) | abs > 0.01 }}"
+      sequence:
+      - action: climate.set_hvac_mode
+        target:
+          entity_id:
+          - climate.zusatzheizung_1
+          - climate.zusatzheizung_2
+        data:
+          hvac_mode: heat
+      - action: climate.set_temperature
+        target:
+          entity_id:
+          - climate.zusatzheizung_1
+          - climate.zusatzheizung_2
+        data:
+          temperature: '{{ plan_ziel }}'
+    - conditions:
+      - condition: template
+        value_template: '{{ not (winter_freigabe | bool) }}'
+      - condition: template
+        value_template: "{% set t1 = state_attr('climate.zusatzheizung_1', 'temperature') %}\n{% set t2 = state_attr('climate.zusatzheizung_2', 'temperature') %}\n{{ states('climate.zusatzheizung_1') != 'off'\n   or states('climate.zusatzheizung_2') != 'off'\n   or (is_number(t1) and (t1 | float(0) - 10.0) | abs > 0.01)\n   or (is_number(t2) and (t2 | float(0) - 10.0) | abs > 0.01) }}"
+      sequence:
+      - action: climate.set_temperature
+        target:
+          entity_id:
+          - climate.zusatzheizung_1
+          - climate.zusatzheizung_2
+        data:
+          temperature: 10.0
+      - action: climate.set_hvac_mode
+        target:
+          entity_id:
+          - climate.zusatzheizung_1
+          - climate.zusatzheizung_2
+        data:
+          hvac_mode: 'off'
+# -----------------------------------------------------------------------------
+# 7) ABWESENHEIT: Gesamtabschaltung
+# Schaltet Klimageräte und optionale Zusatzheizungen sicher ab und kontrolliert
+# den AUS-Zustand wiederkehrend. Einzelne Gerätefehler blockieren den Rest nicht.
+# -----------------------------------------------------------------------------
+- id: abwesenheit_gesamtabschaltung
+  alias: 'Abwesenheit: Klima und Zusatzheizungen sicher ausschalten'
+  description: 'Schaltet bei aktiver Abwesenheit beide MELCloud-Klimageräte, die beiden optionalen Zusatzheizungen und den separaten Zusatzheizer aus. Home Assistant kontrolliert den sicheren AUS-Zustand alle 5 Minuten. Die Abschaltbefehle sind fehlertolerant, damit ein Gerätefehler nachfolgende Abschaltungen nicht blockiert.'
+  mode: restart
+  triggers:
+  - trigger: state
+    entity_id: input_boolean.abwesenheit
+    to: 'on'
+    id: abwesenheit_an
+  - trigger: state
+    entity_id: input_boolean.abwesenheit
+    to: 'off'
+    id: abwesenheit_aus_abbruch
+  - trigger: homeassistant
+    event: start
+    id: ha_start
+  - trigger: time_pattern
+    minutes: /5
+    id: sicherheitspruefung
+  conditions: []
+  action:
+  - choose:
+    - conditions:
+      - condition: state
+        entity_id: input_boolean.abwesenheit
+        state: 'on'
+      sequence:
+      - choose:
+        - conditions:
+          - condition: state
+            entity_id: input_boolean.abwesenheit
+            state: 'on'
+          - condition: state
+            entity_id: input_boolean.zusatzheizung_freigabe_hauptraum
+            state: 'on'
+          sequence:
+          - action: input_boolean.turn_off
+            continue_on_error: true
+            target:
+              entity_id: input_boolean.zusatzheizung_freigabe_hauptraum
+      - choose:
+        - conditions:
+          - condition: state
+            entity_id: input_boolean.abwesenheit
+            state: 'on'
+          - condition: state
+            entity_id: input_boolean.zusatzheizer_automatisch
+            state: 'on'
+          sequence:
+          - action: input_boolean.turn_off
+            continue_on_error: true
+            target:
+              entity_id: input_boolean.zusatzheizer_automatisch
+      - choose:
+        - conditions:
+          - condition: state
+            entity_id: input_boolean.abwesenheit
+            state: 'on'
+          - condition: state
+            entity_id: switch.zusatzheizer_strom
+            state: 'on'
+          sequence:
+          - action: switch.turn_off
+            continue_on_error: true
+            target:
+              entity_id: switch.zusatzheizer_strom
+      - choose:
+        - conditions:
+          - condition: state
+            entity_id: input_boolean.abwesenheit
+            state: 'on'
+          - condition: template
+            value_template: "{% set t1 = state_attr('climate.zusatzheizung_1', 'temperature') %} {% set t2 = state_attr('climate.zusatzheizung_2', 'temperature') %} {{ states('climate.zusatzheizung_1') != 'off'\n   or states('climate.zusatzheizung_2') != 'off'\n   or (is_number(t1) and (t1 | float(0) - 10.0) | abs > 0.01)\n   or (is_number(t2) and (t2 | float(0) - 10.0) | abs > 0.01) }}\n"
+          sequence:
+          - action: climate.set_temperature
+            continue_on_error: true
+            target:
+              entity_id:
+              - climate.zusatzheizung_1
+              - climate.zusatzheizung_2
+            data:
+              temperature: 10.0
+          - action: climate.set_hvac_mode
+            continue_on_error: true
+            target:
+              entity_id:
+              - climate.zusatzheizung_1
+              - climate.zusatzheizung_2
+            data:
+              hvac_mode: 'off'
+      - choose:
+        - conditions:
+          - condition: state
+            entity_id: input_boolean.abwesenheit
+            state: 'on'
+          - condition: template
+            value_template: '{{ states(''climate.hauptraum_ac'') not in [''off'', ''unknown'', ''unavailable''] }}
+
+              '
+          sequence:
+          - action: climate.set_hvac_mode
+            continue_on_error: true
+            target:
+              entity_id: climate.hauptraum_ac
+            data:
+              hvac_mode: 'off'
+      - choose:
+        - conditions:
+          - condition: state
+            entity_id: input_boolean.abwesenheit
+            state: 'on'
+          - condition: template
+            value_template: '{{ states(''climate.nebenraum_ac'') not in [''off'', ''unknown'', ''unavailable''] }}
+
+              '
+          sequence:
+          - action: climate.set_hvac_mode
+            continue_on_error: true
+            target:
+              entity_id: climate.nebenraum_ac
+            data:
+              hvac_mode: 'off'
+# -----------------------------------------------------------------------------
+# 8) ABWESENHEIT: Rückkehr automatisch erkennen
+# Wird eines der Klimageräte bewusst von AUS in einen aktiven Modus geschaltet,
+# wird die Abwesenheit beendet. unknown/unavailable zählt bewusst nicht als Rückkehr.
+# -----------------------------------------------------------------------------
+- id: abwesenheit_auto_ende_bei_klima_ein
+  alias: 'Abwesenheit: Automatisch beenden, wenn eine Klima eingeschaltet wird'
+  description: 'Beendet den Abwesenheitsmodus, wenn eines der beiden Klimageräte bewusst von AUS in einen aktiven HVAC-Modus geschaltet wird. Zustandswechsel aus unknown oder unavailable gelten absichtlich nicht als Rückkehr.'
+  mode: single
+  triggers:
+  - trigger: state
+    entity_id: climate.hauptraum_ac
+    from: 'off'
+    id: hauptraum_eingeschaltet
+  - trigger: state
+    entity_id: climate.nebenraum_ac
+    from: 'off'
+    id: nebenraum_eingeschaltet
+  conditions:
+  - condition: state
+    entity_id: input_boolean.abwesenheit
+    state: 'on'
+  - condition: template
+    value_template: "{{ trigger.to_state is not none\n   and trigger.to_state.state not in ['off', 'unknown', 'unavailable'] }}\n"
+  action:
+  - action: input_boolean.turn_off
+    target:
+      entity_id: input_boolean.abwesenheit
+# -----------------------------------------------------------------------------
+# 9) SEPARATER ZUSATZHEIZER: Temperaturautomatik
+# Der eigene Referenzsensor führt die Regelung. Automatischer Start erfolgt bei
+# gültigen Bedingungen unter Wunsch; Abschaltung bei Wunsch + 0,5 °C.
+# -----------------------------------------------------------------------------
+- id: zusatzheizer_temperaturautomatik
+  alias: 'Zusatzheizer: Temperaturautomatik mit eigenem Referenzsensor'
+  description: 'Regelt einen separaten schaltbaren Zusatzheizer über einen eigenen Referenzsensor. Automatik ist nur bei HEAT/AUTO, in Abwesenheit AUS, bei gültigen Messwerten, außen höchstens 15 °C und Außen <= Innen zulässig. EIN erfolgt sofort unter Wunsch, AUS ab Wunsch + 0,5 °C oder wenn eine Freigabebedingung entfällt. Manuelle Läufe werden separat begrenzt.'
+  mode: restart
+  triggers:
+  - trigger: state
+    entity_id: sensor.zusatzheizer_referenztemperatur
+    id: e3_geaendert
+  - trigger: state
+    entity_id: input_number.wunschtemperatur_hauptraum
+    id: wunsch_geaendert
+  - trigger: state
+    entity_id: weather.home
+    attribute: temperature
+    id: aussen_geaendert
+  - trigger: state
+    entity_id: climate.hauptraum_ac
+    id: klima_geaendert
+  - trigger: state
+    entity_id: input_boolean.abwesenheit
+    id: abwesenheit_geaendert
+  - trigger: homeassistant
+    event: start
+    id: ha_start
+  - trigger: time_pattern
+    minutes: /5
+    id: sicherheitspruefung
+  conditions: []
+  action:
+  - variables:
+      regel_temp: '{% set e3 = states(''sensor.zusatzheizer_referenztemperatur'') %}
+
+        {% if is_number(e3) %}{{ e3 | float }}{% else %}{{ none }}{% endif %}'
+      wunsch: '{% set w = states(''input_number.wunschtemperatur_hauptraum'') %}
+
+        {% if is_number(w) %}{{ w | float }}{% else %}{{ none }}{% endif %}'
+      aussen: '{% set a = state_attr(''weather.home'', ''temperature'') %}
+
+        {% if is_number(a) %}{{ a | float }}{% else %}{{ none }}{% endif %}'
+      e3_gueltig: '{{ regel_temp not in [none, ''None'', ''unknown'', ''unavailable'', ''''] }}'
+      auto_bedingung_gueltig: "{{ is_state('input_boolean.abwesenheit', 'off')\n   and states('climate.hauptraum_ac') in ['heat', 'auto']\n   and (e3_gueltig | bool)\n   and wunsch not in [none, 'None', 'unknown', 'unavailable', '']\n   and aussen not in [none, 'None', 'unknown', 'unavailable', '']\n   and (aussen | float) <= 15.0\n   and (aussen | float) <= (regel_temp | float) }}"
+  - choose:
+    - conditions:
+      - condition: template
+        value_template: '{{ not (e3_gueltig | bool) }}'
+      sequence:
+      - action: switch.turn_off
+        continue_on_error: true
+        target:
+          entity_id: switch.zusatzheizer_strom
+      - action: input_boolean.turn_off
+        target:
+          entity_id: input_boolean.zusatzheizer_automatisch
+    - conditions:
+      - condition: template
+        value_template: "{{ auto_bedingung_gueltig | bool\n   and (regel_temp | float) < (wunsch | float)\n   and states('input_boolean.zusatzheizer_automatisch') == 'off'\n   and states('switch.zusatzheizer_strom') == 'off' }}"
+      sequence:
+      - action: input_boolean.turn_on
+        target:
+          entity_id: input_boolean.zusatzheizer_automatisch
+      - action: switch.turn_on
+        continue_on_error: true
+        target:
+          entity_id: switch.zusatzheizer_strom
+    - conditions:
+      - condition: template
+        value_template: "{{ auto_bedingung_gueltig | bool\n   and (regel_temp | float) < ((wunsch | float) + 0.5)\n   and states('input_boolean.zusatzheizer_automatisch') == 'on'\n   and states('switch.zusatzheizer_strom') == 'off' }}"
+      sequence:
+      - action: switch.turn_on
+        continue_on_error: true
+        target:
+          entity_id: switch.zusatzheizer_strom
+    - conditions:
+      - condition: state
+        entity_id: input_boolean.zusatzheizer_automatisch
+        state: 'on'
+      - condition: template
+        value_template: "{{ not (auto_bedingung_gueltig | bool)\n   or (regel_temp | float(999)) >= ((wunsch | float(0)) + 0.5) }}"
+      sequence:
+      - action: switch.turn_off
+        continue_on_error: true
+        target:
+          entity_id: switch.zusatzheizer_strom
+      - action: input_boolean.turn_off
+        target:
+          entity_id: input_boolean.zusatzheizer_automatisch
+# -----------------------------------------------------------------------------
+# 10) SEPARATER ZUSATZHEIZER: Sicherheit und manuelle Laufzeitbegrenzung
+# Enthält harte Abschaltbedingungen und begrenzt manuell oder per
+# Sprachassistent gestartete Läufe auf vier Stunden. Die Frist bleibt über HA-Neustarts erhalten.
+# -----------------------------------------------------------------------------
+- id: zusatzheizer_sicherheit_manuelle_laufzeit
+  alias: 'Zusatzheizer: Sicherheit und manuelle 4-Stunden-Grenze'
+  description: '23:00 Uhr, Hauptklima AUS, Abwesenheit EIN oder ein ungültiger Referenzsensor sind harte Abschaltbedingungen. Ein manuell oder per Sprachassistent gestarteter Lauf wird auf vier Stunden begrenzt. Der Abschaltzeitpunkt wird in input_datetime.zusatzheizer_manuell_bis gespeichert, sodass die Frist einen Home-Assistant-Neustart oder Automation-Reload übersteht. Die 23-Uhr-Abschaltung ist bewusst nur ein einmaliger Abschaltzeitpunkt und keine dauerhafte Nachtsperre.'
+  mode: restart
+  triggers:
+  - trigger: time
+    at: '23:00:00'
+    id: nachts_23_uhr
+  - trigger: state
+    entity_id: climate.hauptraum_ac
+    to: 'off'
+    id: klima_aus
+  - trigger: state
+    entity_id: input_boolean.abwesenheit
+    to: 'on'
+    id: abwesenheit_an
+  - trigger: template
+    value_template: '{{ not is_number(states(''sensor.zusatzheizer_referenztemperatur'')) }}
+
+      '
+    id: referenzsensor_ungueltig
+  - trigger: state
+    entity_id: switch.zusatzheizer_strom
+    to: 'on'
+    id: strom_ein
+  - trigger: state
+    entity_id: switch.zusatzheizer_strom
+    to: 'off'
+    id: strom_aus
+  - trigger: time
+    at: input_datetime.zusatzheizer_manuell_bis
+    id: manuell_bis
+  - trigger: time_pattern
+    minutes: /1
+    id: fristsicherung
+  - trigger: homeassistant
+    event: start
+    id: ha_start
+  conditions: []
+  action:
+  - choose:
+    - conditions:
+      - condition: trigger
+        id:
+        - nachts_23_uhr
+        - klima_aus
+        - abwesenheit_an
+        - referenzsensor_ungueltig
+      sequence:
+      - action: switch.turn_off
+        continue_on_error: true
+        target:
+          entity_id: switch.zusatzheizer_strom
+      - action: input_boolean.turn_off
+        target:
+          entity_id: input_boolean.zusatzheizer_automatisch
+    - conditions:
+      - condition: trigger
+        id: strom_ein
+      - condition: template
+        value_template: "{{ is_state('climate.hauptraum_ac', 'off')\n   or is_state('input_boolean.abwesenheit', 'on')\n   or not is_number(states('sensor.zusatzheizer_referenztemperatur')) }}\n"
+      sequence:
+      - action: switch.turn_off
+        continue_on_error: true
+        target:
+          entity_id: switch.zusatzheizer_strom
+      - action: input_boolean.turn_off
+        target:
+          entity_id: input_boolean.zusatzheizer_automatisch
+    - conditions:
+      - condition: trigger
+        id: strom_ein
+      - condition: state
+        entity_id: input_boolean.zusatzheizer_automatisch
+        state: 'off'
+      - condition: template
+        value_template: '{{ not is_state(''climate.hauptraum_ac'', ''off'') }}
+
+          '
+      - condition: state
+        entity_id: input_boolean.abwesenheit
+        state: 'off'
+      - condition: template
+        value_template: '{{ is_number(states(''sensor.zusatzheizer_referenztemperatur'')) }}
+
+          '
+      sequence:
+      - action: input_datetime.set_datetime
+        target:
+          entity_id: input_datetime.zusatzheizer_manuell_bis
+        data:
+          timestamp: '{{ as_timestamp(now()) + 14400 }}'
+    - conditions:
+      - condition: trigger
+        id:
+        - manuell_bis
+        - fristsicherung
+        - ha_start
+      - condition: state
+        entity_id: switch.zusatzheizer_strom
+        state: 'on'
+      - condition: state
+        entity_id: input_boolean.zusatzheizer_automatisch
+        state: 'off'
+      - condition: template
+        value_template: '{% set bis = as_timestamp(states(''input_datetime.zusatzheizer_manuell_bis''), 0) %} {{ bis > 0 and as_timestamp(now()) >= bis }}
+
+          '
+      sequence:
+      - action: switch.turn_off
+        continue_on_error: true
+        target:
+          entity_id: switch.zusatzheizer_strom
+    - conditions:
+      - condition: trigger
+        id: strom_aus
+      sequence:
+      - action: input_boolean.turn_off
+        target:
+          entity_id: input_boolean.zusatzheizer_automatisch
+# -----------------------------------------------------------------------------
+# 11) NEBENRAUM: MELCloud-Hauptregelung
+# Gleiche Regelidee wie im Hauptraum, aber mit eigener Wunschtemperatur und
+# eigener externer Referenztemperatur.
+# -----------------------------------------------------------------------------
+- id: melcloud_nebenraum_hauptsteuerung
+  alias: 'MELCloud Nebenraum: Hauptsteuerung mit externer Raumreferenz'
+  description: 'Regelt das zweite MELCloud-Klimagerät nach derselben Logik wie den Hauptraum, jedoch mit eigener Wunschtemperatur und eigener externer Referenztemperatur. AUTO nutzt feste 0,5-°C-Korrekturstufen bis +/-3,0 °C; HEAT und COOL arbeiten außerhalb der Neutralzone linear 1:1. Echte Sollwertänderungen aus MELCloud/App/Sprachsteuerung werden separat als neuer Wunschwert übernommen.'
+  mode: restart
+  triggers:
+  - trigger: state
+    entity_id: input_number.wunschtemperatur_nebenraum
+    id: wunsch
+  - trigger: state
+    entity_id: sensor.nebenraum_referenztemperatur
+    id: raum
+  - trigger: state
+    entity_id: climate.nebenraum_ac
+    attribute: current_temperature
+    id: geraet_ist
+  - trigger: state
+    entity_id: climate.nebenraum_ac
+    to: auto
+    id: modus_auto
+  - trigger: state
+    entity_id: climate.nebenraum_ac
+    to: heat
+    id: modus_heat
+  - trigger: state
+    entity_id: climate.nebenraum_ac
+    to: cool
+    id: modus_cool
+  - trigger: time_pattern
+    minutes: /5
+    id: sicherheitspruefung
+  - trigger: state
+    entity_id: input_boolean.abwesenheit
+    to: 'off'
+    id: abwesenheit_aus
+  conditions:
+  - condition: state
+    entity_id: input_boolean.abwesenheit
+    state: 'off'
+  - condition: state
+    entity_id: climate.nebenraum_ac
     state:
     - auto
     - heat
     - cool
   action:
   - variables:
-      target_temperature: "{% set desired_raw = states('input_number.bedroom_desired_temperature') %}\n{% set external_raw = states('sensor.bedroom_external_temperature') %}\n{% set internal = state_attr('climate.bedroom_heat_pump', 'current_temperature') %}\n{% set mode = states('climate.bedroom_heat_pump') %}\n{% set min_raw = state_attr('climate.bedroom_heat_pump', 'min_temp') %}\n{% set max_raw = state_attr('climate.bedroom_heat_pump', 'max_temp') %}\n{% set min_temp = (min_raw | float) if is_number(min_raw) else 16.0 %}\n{% set max_temp = (max_raw | float) if is_number(max_raw) else 30.0 %}\n\n{% if is_number(desired_raw) and is_number(external_raw) and is_number(internal) %}\n  {% set desired = desired_raw | float %}\n  {% set external = external_raw | float %}\n  {% set internal_temp = internal | float %}\n  {% set error = external - desired %}\n\n  {% if (error | abs) <= 0.25 %}\n    {% set correction = 0.0 %}\n  {% else %}\n    {% set factor = 1.5 if mode == 'auto' else 1.0 %}\n\
-        \    {% set raw_correction = error * factor %}\n    {% set correction = [[raw_correction, -3.0] | max, 3.0] | min %}\n  {% endif %}\n\n  {% set calculated = internal_temp - correction %}\n  {% set clamped = [[calculated, min_temp] | max, max_temp] | min %}\n  {% set rounded = ((clamped * 2) | round) / 2 %}\n  {{ [[rounded, min_temp] | max, max_temp] | min }}\n{% else %}\n  {{ none }}\n{% endif %}"
+      roh_ziel: >-
+        {% set wunsch_raw = states('input_number.wunschtemperatur_nebenraum') %}
+
+        {% set extern_raw = states('sensor.nebenraum_referenztemperatur') %}
+
+        {% set intern = state_attr('climate.nebenraum_ac', 'current_temperature') %}
+
+        {% set modus = states('climate.nebenraum_ac') %}
+
+        {% set min_raw = state_attr('climate.nebenraum_ac', 'min_temp') %}
+
+        {% set max_raw = state_attr('climate.nebenraum_ac', 'max_temp') %}
+
+        {% set min_temp = (min_raw | float) if is_number(min_raw) else 16.0 %}
+
+        {% set max_temp = (max_raw | float) if is_number(max_raw) else 30.0 %}
+
+
+        {% if is_number(wunsch_raw) and is_number(extern_raw) and is_number(intern) %}
+          {% set wunsch = wunsch_raw | float %}
+          {% set extern = extern_raw | float %}
+          {% set intern_temp = intern | float %}
+          {% set fehler = extern - wunsch %}
+          {% set abs_f = fehler | abs %}
+
+          {# Gemeinsame Neutralzone fuer AUTO, HEAT und COOL. #}
+          {% if abs_f <= 0.25 %}
+            {% set korr = 0.0 %}
+          {% elif modus in ['heat', 'cool'] %}
+            {# HEAT/COOL bleiben ausserhalb der Neutralzone linear 1:1. #}
+            {% set korr = fehler %}
+          {% else %}
+            {# AUTO arbeitet bewusst in den 0,5-Grad-Stufen der Mitsubishi-Hardware, bis maximal +/-3,0°C. #}
+            {% if abs_f <= 0.75 %}
+              {% set korr = 0.5 if fehler > 0 else -0.5 %}
+            {% elif abs_f <= 1.25 %}
+              {% set korr = 1.0 if fehler > 0 else -1.0 %}
+            {% elif abs_f <= 1.75 %}
+              {% set korr = 1.5 if fehler > 0 else -1.5 %}
+            {% elif abs_f <= 2.25 %}
+              {% set korr = 2.0 if fehler > 0 else -2.0 %}
+            {% elif abs_f <= 2.75 %}
+              {% set korr = 2.5 if fehler > 0 else -2.5 %}
+            {% else %}
+              {% set korr = 3.0 if fehler > 0 else -3.0 %}
+            {% endif %}
+          {% endif %}
+
+          {% set berechnet = intern_temp - korr %}
+          {% set geklemmt = [[berechnet, min_temp] | max, max_temp] | min %}
+          {% set gerundet = ((geklemmt * 2) | round) / 2 %}
+          {{ [[gerundet, min_temp] | max, max_temp] | min }}
+        {% else %}
+          {{ none }}
+        {% endif %}
   - choose:
     - conditions:
       - condition: template
-        value_template: '{{ target_temperature not in [none, ''None'', ''unknown'', ''unavailable'', ''''] }}'
+        value_template: '{{ roh_ziel not in [none, ''None'', ''unknown'', ''unavailable'', ''''] }}'
       - condition: template
-        value_template: "{% set last = states('input_number.bedroom_last_automatic_target') %}\n{% set device_target = state_attr('climate.bedroom_heat_pump', 'temperature') %}\n{% set target_changed = last in ['unknown', 'unavailable', none]\n   or (target_temperature | float(0) - (last | float(0))) | abs > 0.01 %}\n{% set mode_changed = trigger.id in ['mode_auto', 'mode_heat', 'mode_cool'] %}\n{% set retry_needed = trigger.id == 'safety_retry'\n   and is_number(device_target)\n   and (target_temperature | float(0) - (device_target | float(0))) | abs > 0.01 %}\n{{ target_changed or mode_changed or retry_needed }}"
+        value_template: '{% set letzte = states(''input_number.letzte_automatische_zieltemperatur_nebenraum'') %}
+
+          {% set geraet = state_attr(''climate.nebenraum_ac'', ''temperature'') %}
+
+          {% set ziel_geaendert = letzte in [''unknown'', ''unavailable'', none] or (roh_ziel | float(0) - (letzte | float(0))) | abs > 0.01 %}
+
+          {% set modus_neu = trigger.id in [''modus_auto'', ''modus_heat'', ''modus_cool''] %}
+
+          {% set sicherheits_retry = trigger.id == ''sicherheitspruefung'' and is_number(geraet) and (roh_ziel | float(0) - (geraet | float(0))) | abs > 0.01 %}
+
+          {{ ziel_geaendert or modus_neu or sicherheits_retry }}'
       sequence:
-      - action: climate.set_temperature
-        target:
-          entity_id: climate.bedroom_heat_pump
-        data:
-          temperature: '{{ target_temperature }}'
+      # Das automatische Ziel wird VOR dem Cloud-Befehl gespeichert,
+      # damit die Rücksynchronisierung es nicht als Benutzerbefehl interpretiert.
       - action: input_number.set_value
         target:
-          entity_id: input_number.bedroom_last_automatic_target
+          entity_id: input_number.letzte_automatische_zieltemperatur_nebenraum
         data:
-          value: '{{ target_temperature }}'
-- id: melcloud_home_optional_horizontal_swing
-  alias: 'MELCloud Home: Optional horizontal swing automation'
-  description: Optional example for living-room horizontal swing. When the real room is >=0.7 C away from target for one minute, use horizontal swing. When it is within 0.3 C for one minute, return to centre.
+          value: '{{ roh_ziel }}'
+      - action: climate.set_temperature
+        target:
+          entity_id: climate.nebenraum_ac
+        data:
+          temperature: '{{ roh_ziel }}'
+# -----------------------------------------------------------------------------
+# 12) NEBENRAUM: Benutzer-Sollwert aus MELCloud/App/Sprachsteuerung übernehmen
+# Gleiche Rücksynchronisierung wie im Hauptraum.
+# -----------------------------------------------------------------------------
+- id: melcloud_nebenraum_benutzer_sollwert_sync
+  alias: 'MELCloud Nebenraum: Benutzer-Sollwert als Wunsch übernehmen'
+  description: 'Übernimmt echte Sollwertänderungen aus MELCloud/MELCloud Home, unterstützten Apps oder Sprachsteuerungen in den Wunschtemperatur-Helper des Nebenraums. Automatisch gesetzte Kompensations-Sollwerte werden über letzte_automatische_zieltemperatur_nebenraum erkannt und ignoriert.'
+  mode: restart
+  triggers:
+  - trigger: state
+    entity_id: climate.nebenraum_ac
+    attribute: temperature
+    id: geraet_soll_geaendert
+  conditions:
+  - condition: state
+    entity_id: input_boolean.abwesenheit
+    state: 'off'
+  - condition: template
+    value_template: >-
+      {% set neu = trigger.to_state.attributes.get('temperature') if trigger.to_state is not none else none %}
+      {% set letzte_auto = states('input_number.letzte_automatische_zieltemperatur_nebenraum') %}
+      {% set wunsch = states('input_number.wunschtemperatur_nebenraum') %}
+      {{ is_number(neu)
+         and is_number(letzte_auto)
+         and is_number(wunsch)
+         and ((neu | float) - (letzte_auto | float)) | abs > 0.01
+         and ((neu | float) - (wunsch | float)) | abs > 0.01 }}
+  action:
+  - action: input_number.set_value
+    target:
+      entity_id: input_number.wunschtemperatur_nebenraum
+    data:
+      value: "{{ trigger.to_state.attributes.get('temperature') | float }}"
+
+# -----------------------------------------------------------------------------
+# 13) OPTIONAL: Horizontale Lamellen-/Swing-Automatik im Hauptraum
+# Aktiviert horizontales Schwenken bei größerer Abweichung und stellt die Lamelle
+# nahe am Ziel wieder auf Mitte. Die Schwellen müssen jeweils 1 Minute stabil sein.
+# -----------------------------------------------------------------------------
+- id: melcloud_hauptraum_horizontal_swing
+  alias: 'MELCloud Hauptraum: Horizontale Swing-Automatik'
+  description: 'Aktiviert horizontales Schwenken, wenn die externe Referenztemperatur mindestens 0,7 °C von der Wunschtemperatur abweicht. Bei höchstens 0,3 °C Abweichung wird die Lamelle wieder auf Mittelstellung (centre) gesetzt. Die jeweilige Bedingung muss eine Minute stabil anliegen.'
   mode: restart
   triggers:
   - trigger: template
     id: swing
-    value_template: "{% set external = states('sensor.living_room_external_temperature') %}\n{% set desired = states('input_number.living_room_desired_temperature') %}\n{{ states('climate.living_room_heat_pump') in ['auto', 'heat', 'cool']\n   and is_number(external)\n   and is_number(desired)\n   and ((external | float) - (desired | float)) | abs >= 0.7 }}"
+    value_template: "{% set avg_raw = states('sensor.hauptraum_referenztemperatur') %}\n{% set wunsch_raw = states('input_number.wunschtemperatur_hauptraum') %}\n{{ states('climate.hauptraum_ac') in ['heat', 'cool', 'auto']\n   and is_number(avg_raw)\n   and is_number(wunsch_raw)\n   and ((avg_raw | float) - (wunsch_raw | float)) | abs >= 0.7 }}"
     for:
+      hours: 0
       minutes: 1
+      seconds: 0
   - trigger: template
-    id: centre
-    value_template: "{% set external = states('sensor.living_room_external_temperature') %}\n{% set desired = states('input_number.living_room_desired_temperature') %}\n{{ states('climate.living_room_heat_pump') in ['auto', 'heat', 'cool']\n   and is_number(external)\n   and is_number(desired)\n   and ((external | float) - (desired | float)) | abs <= 0.3 }}"
+    id: mitte
+    value_template: "{% set avg_raw = states('sensor.hauptraum_referenztemperatur') %}\n{% set wunsch_raw = states('input_number.wunschtemperatur_hauptraum') %}\n{{ states('climate.hauptraum_ac') in ['heat', 'cool', 'auto']\n   and is_number(avg_raw)\n   and is_number(wunsch_raw)\n   and ((avg_raw | float) - (wunsch_raw | float)) | abs <= 0.3 }}"
     for:
+      hours: 0
       minutes: 1
-  conditions: []
+      seconds: 0
+  conditions:
+  - condition: state
+    entity_id: input_boolean.abwesenheit
+    state: 'off'
   action:
   - choose:
     - conditions:
       - condition: trigger
         id: swing
       - condition: template
-        value_template: '{{ state_attr(''climate.living_room_heat_pump'', ''swing_horizontal_mode'') != ''swing'' }}'
+        value_template: '{{ state_attr(''climate.hauptraum_ac'', ''swing_horizontal_mode'') != ''swing'' }}'
       sequence:
       - action: climate.set_swing_horizontal_mode
         target:
-          entity_id: climate.living_room_heat_pump
+          entity_id: climate.hauptraum_ac
         data:
           swing_horizontal_mode: swing
     - conditions:
       - condition: trigger
-        id: centre
+        id: mitte
       - condition: template
-        value_template: '{{ state_attr(''climate.living_room_heat_pump'', ''swing_horizontal_mode'') != ''centre'' }}'
+        value_template: '{{ state_attr(''climate.hauptraum_ac'', ''swing_horizontal_mode'') != ''centre'' }}'
       sequence:
       - action: climate.set_swing_horizontal_mode
         target:
-          entity_id: climate.living_room_heat_pump
+          entity_id: climate.hauptraum_ac
         data:
           swing_horizontal_mode: centre
