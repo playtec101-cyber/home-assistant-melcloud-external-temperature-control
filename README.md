@@ -60,6 +60,7 @@ This avoids maintaining two almost identical large controller files that could d
 - If Home Assistant or its server is unavailable but Internet/MELCloud still works, MELCloud Home remains a separate fallback path.
 - MELCloud Home can remain available on phones/tablets for manual control.
 - Manual MELCloud target changes are seen again by the local adapter state and can be copied into the Home Assistant desired-temperature helper.
+- Changes made with the original IR remote were verified to propagate back to the local Home Assistant entity and to MELCloud Home.
 
 The complete local controller and the complete MELCloud controller should **not** both be active against the same devices at the same time. Choose one primary controller.
 
@@ -134,6 +135,8 @@ That value is then copied into the desired-temperature helper.
 This prevents the controller's own compensation target from being interpreted as a new user request.
 
 In the **local-primary architecture**, a manual target change from MELCloud Home reaches the physical unit first. The local integration polls the adapter and reports the changed device target back to Home Assistant, where the same feedback-loop protection applies.
+
+The same path was verified for the original IR remote: the indoor unit updates its state, the MAC-577IF2-E receives that state, Home Assistant picks up the new target locally, and MELCloud Home is updated as well.
 
 ---
 
@@ -214,11 +217,19 @@ For the local-primary architecture, follow `LOCAL_CONTROL_WITH_MELCLOUD_FALLBACK
 
 ## Original Mitsubishi infrared remote
 
-The original Mitsubishi IR remote was not part of the tested synchronization path.
+The original Mitsubishi IR remote was tested with the local-primary setup.
 
-Direct IR control of the indoor unit is expected to remain independent of Home Assistant and Internet access, but this repository does **not** claim how quickly or reliably IR-made target changes are reflected back through the local integration and/or MELCloud Home.
+Verified signal path:
 
-Feedback from users who test that path is welcome.
+```text
+IR remote -> indoor-unit control board -> internal interface/CN105 -> MAC-577IF2-E
+```
+
+The changed target was then reflected in the local Home Assistant climate entity, the desired-temperature helper through the existing manual-target synchronization automation, and MELCloud Home.
+
+In the tested setup, the local Home Assistant value followed the IR change within seconds.
+
+The IR remote therefore remains a direct control path that does not depend on the Home Assistant server or Internet access.
 
 ---
 
@@ -262,7 +273,7 @@ Useful feedback includes:
 - MELCloud-to-local synchronization delay
 - horizontal-vane behavior
 - behavior during Internet or Home Assistant outages
-- IR-remote behavior, if tested
+- IR-remote synchronization behavior
 
 Please do not post credentials, access tokens, e-mail addresses or private network information.
 
