@@ -1,63 +1,130 @@
 # Deutsche Kurzfassung
 
-Dieses Repository zeigt eine in Home Assistant getestete Lösung für Mitsubishi-Electric-Klimaanlagen über die **klassische MELCloud-Integration**.
+Dieses Repository zeigt eine in Home Assistant getestete Regelung für Mitsubishi-Electric-Klimaanlagen mit **externen Raumtemperatursensoren als Komfortreferenz**.
 
-## Ziel
+Es gibt jetzt zwei Hauptvarianten:
 
-Die interne Temperaturmessung des Innengeräts wird nicht als alleinige Referenz verwendet. Stattdessen regelt Home Assistant anhand externer Raumtemperatursensoren.
+1. **Lokale Mitsubishi-Steuerung als Primärweg, MELCloud Home als Fallback**
+2. **MELCloud Home als Primärweg**
 
-Enthalten sind zwei Varianten:
+Die ältere klassische MELCloud-Variante bleibt ebenfalls dokumentiert.
 
-- **Schlafzimmer:** ein externer Temperatursensor
-- **Wohnzimmer:** mehrere Temperatursensoren, deren Mittelwert verwendet wird
+## Empfohlene Architektur: lokal primär, MELCloud als Reserve
 
-Zusätzlich enthalten:
-
-- Korrektur des Mitsubishi-Sollwerts
-- Übernahme manueller Sollwertänderungen aus MELCloud/App/Sprachsteuerung
-- Schutz vor Rückkopplungsschleifen
-- zwei Lösungen für den problematischen Automatikbetrieb
-- zusätzlicher MELCloud-Abruf alle fünf Minuten
-- optionale horizontale Lamellensteuerung
-
-## Wichtig zum Automatikmodus
-
-Im getesteten System funktionierten festes HEAT und COOL grundsätzlich brauchbar. Das deutlich größere Problem war der Mitsubishi-AUTO-Modus.
-
-### Wohnzimmer
-
-Beim Einschalten von AUTO entscheidet Home Assistant zunächst anhand des externen Mittelwerts:
-
-- ab Wunsch +0,5 °C -> COOL
-- ab Wunsch -0,5 °C -> HEAT
-- innerhalb ±0,5 °C -> AUTO bleibt direkt aktiv
-
-HEAT/COOL bleibt gegebenenfalls 15 Minuten aktiv. Danach geht die Anlage zurück in echtes Mitsubishi-AUTO. Dort wird der Sollwert dynamisch korrigiert:
+Getesteter Primärweg:
 
 ```text
-Mitsubishi-Soll =
-Mitsubishi-Ist - (externer Mittelwert - Wunschtemperatur)
+Home Assistant -> lokales Netzwerk -> MAC-577IF2-E -> Klimaanlage
 ```
 
-### Schlafzimmer
+Fallback:
 
-Hier wird der schlechte native Automatikbetrieb umgangen, indem Home Assistant bewusst zwischen HEAT und COOL umschaltet:
+```text
+MELCloud Home -> Mitsubishi Cloud -> Klimaanlage
+```
 
-- HEAT -> COOL erst nach 15 Minuten bei mindestens Wunsch +1,0 °C
-- COOL -> HEAT erst nach 15 Minuten bei höchstens Wunsch -1,0 °C
+Vorteile:
 
-Dadurch entstehen keine schnellen Moduswechsel.
+- Bei DSL-/Internetausfall bleibt die lokale Home-Assistant-Steuerung verfügbar.
+- Bei MELCloud-Störung läuft die lokale Regelung weiter.
+- Bei Ausfall von Home Assistant/Server kann MELCloud Home weiter als Reserve dienen, sofern Internet und Mitsubishi-Cloud verfügbar sind.
+- Die MELCloud-App kann auf Handy/Tablet weiterhin manuell verwendet werden.
+- Rückkopplungsschleifen werden durch den Helfer für den zuletzt automatisch gesetzten Zielwert verhindert.
 
-## MELCloud von ca. 15 Minuten auf maximal ca. 5 Minuten
+Die getestete lokale Integration ist:
 
-Mit `homeassistant.update_entity` wird die MELCloud-Klimaentität alle fünf Minuten zusätzlich aktualisiert.
+`pymitsubishi/homeassistant-mitsubishi`
 
-Der Test hat funktioniert: Eine Änderung in MELCloud auf 22,5 °C wurde beim nächsten 5-Minuten-Zeitpunkt um 19:10:02 von Home Assistant übernommen.
+Ausführliche Anleitung:
 
-Wichtig: `/5` bedeutet die Zeitpunkte `:00`, `:05`, `:10`, ... und nicht „genau fünf Minuten nach der Änderung“.
+`LOCAL_CONTROL_WITH_MELCLOUD_FALLBACK.md`
+
+## Sollwert-Synchronisation
+
+Beide Richtungen wurden getestet:
+
+```text
+Home Assistant lokal -> Klimaanlage -> MELCloud Home
+```
+
+und
+
+```text
+MELCloud Home -> Klimaanlage -> lokale Home-Assistant-Entität
+```
+
+Dadurch kann eine manuelle Änderung in MELCloud weiterhin als echter Nutzerwunsch erkannt und in den Wunschtemperatur-Helfer übernommen werden.
+
+## IR-Fernbedienung ebenfalls getestet
+
+Auch Änderungen mit der originalen Mitsubishi-IR-Fernbedienung wurden erfolgreich zurückgemeldet.
+
+Getesteter Signalweg:
+
+```text
+IR-Fernbedienung -> Platine der Inneneinheit -> interne Schnittstelle/CN105 -> MAC-577IF2-E
+```
+
+Danach wurde der neue Sollwert:
+
+- von der lokalen Home-Assistant-Entität übernommen,
+- über die vorhandene Wunschwert-Synchronisation in den Wunschtemperatur-Helfer geschrieben,
+- und auch in MELCloud Home angezeigt.
+
+Im getesteten System erschien die Änderung lokal innerhalb weniger Sekunden.
+
+Die IR-Fernbedienung bleibt damit zusätzlich ein direkter Bedienweg, der weder Home Assistant noch Internet benötigt.
+
+## Externe Raumtemperaturregelung
+
+Die Klimaanlage regelt nicht allein nach ihrem internen Sensor. Home Assistant berechnet die notwendige Sollwertkorrektur aus der Abweichung zwischen externer Raumtemperatur und Wunschtemperatur.
+
+Im aktuellen vollständigen Controller bleibt der vom Nutzer gewählte Mitsubishi-Modus erhalten:
+
+- AUTO bleibt AUTO
+- HEAT bleibt HEAT
+- COOL bleibt COOL
+
+Im AUTO-Modus werden feste 0,5-°C-Korrekturstufen verwendet. HEAT und COOL nutzen außerhalb der Neutralzone eine lineare 1:1-Korrektur.
+
+## Horizontale Lamellen
+
+Bei der getesteten lokalen Integration lautet die Mittelstellung:
+
+```text
+center
+```
+
+Bei MELCloud Home lautet sie:
+
+```text
+centre
+```
+
+`Swing` funktioniert in beiden getesteten Varianten.
+
+## Wichtig bei der Umstellung
+
+Nicht zwei vollständige Regelungs-YAMLs gleichzeitig gegen dieselben Klimageräte laufen lassen.
+
+MELCloud Home darf als Integration und manueller Fallback aktiv bleiben. Aktiv sein soll aber nur **eine** Hauptautomatik: entweder lokal oder cloudbasiert.
+
+Eine einfache Migration ist möglich, indem die bisherige MELCloud-Entität z. B. von:
+
+```text
+climate.raum
+```
+
+auf
+
+```text
+climate.raum_melcloud
+```
+
+umbenannt wird und die neue lokale Entität anschließend den bisherigen Hauptnamen `climate.raum` erhält. Dann müssen bestehende Automationen nicht überall umgeschrieben werden.
 
 ## Datenschutz
 
-Die veröffentlichten Dateien enthalten keine IP-Adressen, Passwörter, Tokens, API-Keys, E-Mail-Adressen, MAC-Adressen oder Webhook-IDs. Die Entity-IDs wurden durch neutrale Beispielnamen ersetzt.
+Die veröffentlichten Beispiele enthalten keine IP-Adressen, Passwörter, Tokens, API-Keys, E-Mail-Adressen, MAC-Adressen oder privaten Hostnamen. Die Entity-IDs sind neutrale Beispielnamen.
 
-Die englische `README.md` enthält die vollständige Installationsanleitung.
+Die englische `README.md` enthält die ausführlichere Gesamtdokumentation.
