@@ -1,35 +1,94 @@
 # Deutsche Kurzfassung
 
-Dieses Repository zeigt eine in Home Assistant getestete Regelung für Mitsubishi-Electric-Klimaanlagen mit **externen Raumtemperatursensoren als Komfortreferenz**.
+Dieses Repository zeigt getestete Home-Assistant-Regelungen für Mitsubishi-Electric-Klimaanlagen mit **externen Raumtemperatursensoren als Komfortreferenz**.
 
-Es gibt jetzt zwei Hauptvarianten:
+Es gibt **drei unterschiedliche Lösungswege**, die bewusst nebeneinander dokumentiert bleiben.
 
-1. **Lokale Mitsubishi-Steuerung als Primärweg, MELCloud Home als Fallback**
-2. **MELCloud Home als Primärweg**
+## Lösung 1 – älterer / simulierter AUTO-Betrieb mit HEAT und COOL
 
-Die ältere klassische MELCloud-Variante bleibt ebenfalls dokumentiert.
+Bei dieser älteren Variante übernimmt Home Assistant einen größeren Teil der Betriebsentscheidung selbst.
 
-## Empfohlene Architektur: lokal primär, MELCloud als Reserve
+Je nach Abweichung zwischen externer Raumtemperatur und Wunschtemperatur entscheidet die YAML-Logik bewusst zwischen:
 
-Getesteter Primärweg:
+```text
+HEAT
+oder
+COOL
+```
+
+Damit kann ein AUTO-ähnlicher Betrieb entstehen, auch wenn der native Mitsubishi-AUTO-Modus nicht zufriedenstellend arbeitet.
+
+Die älteren Beispiele enthalten unter anderem:
+
+- eine Home-Assistant-gesteuerte HEAT/COOL-Umschaltung mit Hysterese bzw. Stabilitätszeit;
+- eine Variante, die beim Start zunächst HEAT oder COOL wählt und später wieder in nativen Mitsubishi-AUTO zurückkehrt.
+
+Dazu gehören insbesondere:
+
+- `living_room_multi_sensor.yaml`
+- `bedroom_single_sensor.yaml`
+- `melcloud_refresh_5min.yaml`
+- `optional_horizontal_swing.yaml`
+
+Diese Dateien stammen überwiegend aus der Zeit der klassischen MELCloud-Integration.
+
+---
+
+## Lösung 2 – MELCloud Home als Primärweg, echter Mitsubishi-AUTO-Modus
+
+Hier bleibt der vom Nutzer gewählte Mitsubishi-Modus erhalten:
+
+- AUTO bleibt AUTO
+- HEAT bleibt HEAT
+- COOL bleibt COOL
+
+Home Assistant simuliert den AUTO-Modus also **nicht mehr durch Umschalten zwischen HEAT und COOL**.
+
+Stattdessen wird nur der Mitsubishi-Sollwert anhand der externen Raumtemperatur korrigiert.
+
+Aktueller vollständiger Controller:
+
+`melcloud_home_external_temperature_control_public.yaml`
+
+### AUTO-Korrektur
+
+Im AUTO-Modus werden feste 0,5-°C-Korrekturstufen verwendet:
+
+| Absolute Raumabweichung | Korrektur |
+| --- | --- |
+| `<= 0,25 °C` | `0,0 °C` |
+| `> 0,25 bis 0,75 °C` | `0,5 °C` |
+| `> 0,75 bis 1,25 °C` | `1,0 °C` |
+| `> 1,25 bis 1,75 °C` | `1,5 °C` |
+| `> 1,75 bis 2,25 °C` | `2,0 °C` |
+| `> 2,25 bis 2,75 °C` | `2,5 °C` |
+| `> 2,75 °C` | `3,0 °C` |
+
+HEAT und COOL verwenden dieselbe Neutralzone von ±0,25 °C und außerhalb davon eine lineare 1:1-Korrektur.
+
+Der Helfer für den zuletzt automatisch gesetzten Zielwert verhindert, dass die eigene Sollwertkorrektur als neuer Nutzerwunsch zurück in die Wunschtemperatur geschrieben wird.
+
+### Nachteil
+
+Der primäre Steuerweg hängt bei dieser Variante von MELCloud Home bzw. der Mitsubishi-Cloud ab.
+
+---
+
+## Lösung 3 – lokale Primärsteuerung, MELCloud Home nur als Fallback
+
+Das ist die aktuelle lokale Architektur.
+
+Primärweg:
 
 ```text
 Home Assistant -> lokales Netzwerk -> MAC-577IF2-E -> Klimaanlage
 ```
 
-Fallback:
+Fallback / manueller Zweitweg:
 
 ```text
 MELCloud Home -> Mitsubishi Cloud -> Klimaanlage
 ```
-
-Vorteile:
-
-- Bei DSL-/Internetausfall bleibt die lokale Home-Assistant-Steuerung verfügbar.
-- Bei MELCloud-Störung läuft die lokale Regelung weiter.
-- Bei Ausfall von Home Assistant/Server kann MELCloud Home weiter als Reserve dienen, sofern Internet und Mitsubishi-Cloud verfügbar sind.
-- Die MELCloud-App kann auf Handy/Tablet weiterhin manuell verwendet werden.
-- Rückkopplungsschleifen werden durch den Helfer für den zuletzt automatisch gesetzten Zielwert verhindert.
 
 Die getestete lokale Integration ist:
 
@@ -39,9 +98,23 @@ Ausführliche Anleitung:
 
 `LOCAL_CONTROL_WITH_MELCLOUD_FALLBACK.md`
 
-## Sollwert-Synchronisation
+### Was gegenüber Lösung 2 gleich bleibt
 
-Beide Richtungen wurden getestet:
+Die eigentliche Regelungslogik bleibt im Wesentlichen gleich:
+
+- echter Mitsubishi-AUTO-Modus bleibt AUTO;
+- externe Raumtemperatursensoren bestimmen die Sollwertkorrektur;
+- Wunschtemperatur- und Rückkopplungsschutz-Helfer bleiben erhalten.
+
+### Was sich ändert
+
+Die normalen Home-Assistant-Befehle laufen lokal über den MAC-577IF2-E und benötigen für den Primärweg nicht mehr die Mitsubishi-Cloud.
+
+MELCloud Home bleibt trotzdem eingerichtet und kann weiter als manueller Fallback genutzt werden.
+
+### Getestete Synchronisation
+
+Beide Richtungen wurden praktisch getestet:
 
 ```text
 Home Assistant lokal -> Klimaanlage -> MELCloud Home
@@ -53,41 +126,15 @@ und
 MELCloud Home -> Klimaanlage -> lokale Home-Assistant-Entität
 ```
 
-Dadurch kann eine manuelle Änderung in MELCloud weiterhin als echter Nutzerwunsch erkannt und in den Wunschtemperatur-Helfer übernommen werden.
+Damit kann auch eine manuelle Änderung über MELCloud weiterhin von Home Assistant erkannt und in den Wunschtemperatur-Helfer übernommen werden, ohne eine Rückkopplungsschleife zu erzeugen.
 
-## IR-Fernbedienung ebenfalls getestet
+### Ausfallverhalten
 
-Auch Änderungen mit der originalen Mitsubishi-IR-Fernbedienung wurden erfolgreich zurückgemeldet.
+- DSL/Internet ausgefallen: lokale Home-Assistant-Steuerung läuft weiter, solange Server, LAN/WLAN und Adapter funktionieren.
+- MELCloud gestört: lokale Regelung läuft weiter.
+- Home Assistant/Server ausgefallen, Internet vorhanden: MELCloud Home kann weiter als manueller Fallback dienen.
 
-Getesteter Signalweg:
-
-```text
-IR-Fernbedienung -> Platine der Inneneinheit -> interne Schnittstelle/CN105 -> MAC-577IF2-E
-```
-
-Danach wurde der neue Sollwert:
-
-- von der lokalen Home-Assistant-Entität übernommen,
-- über die vorhandene Wunschwert-Synchronisation in den Wunschtemperatur-Helfer geschrieben,
-- und auch in MELCloud Home angezeigt.
-
-Im getesteten System erschien die Änderung lokal innerhalb weniger Sekunden.
-
-Die IR-Fernbedienung bleibt damit zusätzlich ein direkter Bedienweg, der weder Home Assistant noch Internet benötigt.
-
-## Externe Raumtemperaturregelung
-
-Die Klimaanlage regelt nicht allein nach ihrem internen Sensor. Home Assistant berechnet die notwendige Sollwertkorrektur aus der Abweichung zwischen externer Raumtemperatur und Wunschtemperatur.
-
-Im aktuellen vollständigen Controller bleibt der vom Nutzer gewählte Mitsubishi-Modus erhalten:
-
-- AUTO bleibt AUTO
-- HEAT bleibt HEAT
-- COOL bleibt COOL
-
-Im AUTO-Modus werden feste 0,5-°C-Korrekturstufen verwendet. HEAT und COOL nutzen außerhalb der Neutralzone eine lineare 1:1-Korrektur.
-
-## Horizontale Lamellen
+### Horizontale Lamellen
 
 Bei der getesteten lokalen Integration lautet die Mittelstellung:
 
@@ -95,7 +142,7 @@ Bei der getesteten lokalen Integration lautet die Mittelstellung:
 center
 ```
 
-Bei MELCloud Home lautet sie:
+Bei MELCloud Home:
 
 ```text
 centre
@@ -103,13 +150,41 @@ centre
 
 `Swing` funktioniert in beiden getesteten Varianten.
 
-## Wichtig bei der Umstellung
+---
 
-Nicht zwei vollständige Regelungs-YAMLs gleichzeitig gegen dieselben Klimageräte laufen lassen.
+## Infrarot-Fernbedienung
 
-MELCloud Home darf als Integration und manueller Fallback aktiv bleiben. Aktiv sein soll aber nur **eine** Hauptautomatik: entweder lokal oder cloudbasiert.
+Die originale Mitsubishi-IR-Fernbedienung sollte die Inneneinheit in **allen drei Lösungswegen weiterhin direkt bedienen können**, weil sie unabhängig von Home Assistant mit der Klimaanlage kommuniziert.
 
-Eine einfache Migration ist möglich, indem die bisherige MELCloud-Entität z. B. von:
+**Nicht getestet ist bisher die Rückmeldung dieser IR-Änderung in die jeweilige Home-Assistant-Regelung.**
+
+Wir behaupten deshalb derzeit ausdrücklich nicht als verifiziert, wie schnell oder zuverlässig ein per IR geänderter Sollwert anschließend erscheint in:
+
+- der klassischen MELCloud-Entität aus Lösung 1;
+- der MELCloud-Home-Entität aus Lösung 2;
+- der lokalen MAC-577IF2-E-Entität aus Lösung 3;
+- dem Wunschtemperatur-Helfer;
+- MELCloud Home selbst.
+
+Gerade bei Lösung 3 ist es technisch plausibel, dass der geänderte Gerätezustand über den MAC-577IF2-E lokal wieder von Home Assistant gelesen wird. Bis zum Praxistest wird dies aber nur als **wahrscheinlich/erwartet**, nicht als getestet dokumentiert.
+
+Ein sinnvoller Test ist:
+
+1. Sollwert mit der IR-Fernbedienung um 1 °C ändern.
+2. Temperaturattribut der aktiven Home-Assistant-Klimaentität beobachten.
+3. Wunschtemperatur-Helfer beobachten.
+4. MELCloud Home kontrollieren.
+5. Verzögerung notieren.
+
+---
+
+## Wichtig bei Lösung 3
+
+Nicht zwei vollständige Hauptregelungen gleichzeitig gegen dieselben Klimageräte laufen lassen.
+
+MELCloud Home darf als Integration und manueller Fallback aktiv bleiben. Aktiv sein soll aber nur **eine Hauptautomatik**.
+
+Eine einfache Migration ist möglich, indem die bisherige MELCloud-Entität zum Beispiel von:
 
 ```text
 climate.raum
@@ -121,7 +196,9 @@ auf
 climate.raum_melcloud
 ```
 
-umbenannt wird und die neue lokale Entität anschließend den bisherigen Hauptnamen `climate.raum` erhält. Dann müssen bestehende Automationen nicht überall umgeschrieben werden.
+umbenannt wird und die neue lokale Entität anschließend den bisherigen Hauptnamen `climate.raum` erhält.
+
+---
 
 ## Datenschutz
 
