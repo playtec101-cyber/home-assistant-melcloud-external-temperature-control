@@ -144,6 +144,26 @@ swing
 
 That second direction allows the manual-target synchronization automation to keep working even though the primary controller is local.
 
+### IR remote -> unit -> local + MELCloud
+
+This path was also verified in the tested installation.
+
+Signal flow:
+
+```text
+IR remote -> indoor-unit control board -> internal interface/CN105 -> MAC-577IF2-E
+```
+
+The adapter receives the changed state from the indoor unit. The local Home Assistant integration then reads the new value from the adapter, while the adapter also reports the updated state to MELCloud.
+
+That means an IR-made target change can be reflected in:
+
+- the local Home Assistant climate entity
+- the desired-temperature helper via the manual-target sync automation
+- MELCloud Home
+
+In the tested setup the local Home Assistant value followed the IR change within seconds.
+
 ## 7. Entity-ID migration option
 
 If an existing controller already uses stable entity IDs, you can preserve the YAML by swapping which integration owns those IDs.
@@ -210,9 +230,13 @@ Local Home Assistant control continues as long as Home Assistant, the local netw
 
 Cloud voice assistants and MELCloud Home require Internet access and will not be available during the outage.
 
+The original IR remote continues to control the indoor unit directly.
+
 ### Home Assistant/server outage
 
 The local automation is unavailable, but MELCloud Home can still control the unit if Internet/Mitsubishi cloud service is working.
+
+The original IR remote also remains available as a direct local control path.
 
 ### MELCloud outage
 
@@ -220,9 +244,16 @@ The local Home Assistant controller continues without depending on MELCloud.
 
 ## 11. Infrared remote
 
-The original IR remote directly controls the indoor unit and does not require Home Assistant or Internet access.
+The original IR remote controls the indoor unit directly and does not depend on Home Assistant, the Home Assistant server or Internet access.
 
-However, this project has **not** validated how quickly or reliably target changes made by IR are reflected back into the local integration and then into the desired-temperature helper. Treat that synchronization path as untested until verified on your own unit.
+In the tested installation, changes made with the IR remote were propagated by the indoor unit to the MAC-577IF2-E adapter. The local Mitsubishi integration then picked up the changed target, and the existing manual-target synchronization automation updated the Home Assistant desired-temperature helper. MELCloud Home also reflected the changed state.
+
+Practical test procedure:
+
+1. Change the setpoint by 1 °C with the original IR remote.
+2. Watch the local Home Assistant climate entity's `temperature` attribute.
+3. Watch the desired-temperature Number helper.
+4. Confirm MELCloud Home also reaches the same target.
 
 ## 12. Security
 
