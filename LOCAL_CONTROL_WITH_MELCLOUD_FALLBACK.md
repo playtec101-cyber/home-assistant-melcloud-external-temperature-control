@@ -127,7 +127,7 @@ left and right
 swing
 ```
 
-## 6. Verify both synchronization directions
+## 6. Verify both tested synchronization directions
 
 ### Local -> unit -> MELCloud
 
@@ -144,25 +144,23 @@ swing
 
 That second direction allows the manual-target synchronization automation to keep working even though the primary controller is local.
 
-### IR remote -> unit -> local + MELCloud
+### IR remote -> unit -> local/MELCloud: not yet verified
 
-This path was also verified in the tested installation.
+The original Mitsubishi IR remote should still control the indoor unit directly because it does not depend on Home Assistant or Internet access.
 
-Signal flow:
+What has **not** yet been tested in this project is the return synchronization path after an IR-made change.
 
-```text
-IR remote -> indoor-unit control board -> internal interface/CN105 -> MAC-577IF2-E
-```
+It is technically plausible that the indoor unit updates its state, the MAC-577IF2-E receives the new state, and the local Home Assistant integration later reads it back. It is also plausible that MELCloud Home receives the updated unit state.
 
-The adapter receives the changed state from the indoor unit. The local Home Assistant integration then reads the new value from the adapter, while the adapter also reports the updated state to MELCloud.
+Until that is tested on the real installation, this path is documented as **expected/possible, not verified**.
 
-That means an IR-made target change can be reflected in:
+Suggested test:
 
-- the local Home Assistant climate entity
-- the desired-temperature helper via the manual-target sync automation
-- MELCloud Home
-
-In the tested setup the local Home Assistant value followed the IR change within seconds.
+1. Change the setpoint by 1 °C with the original IR remote.
+2. Watch the local Home Assistant climate entity's `temperature` attribute.
+3. Watch the desired-temperature Number helper.
+4. Check MELCloud Home.
+5. Record the approximate delay.
 
 ## 7. Entity-ID migration option
 
@@ -230,13 +228,13 @@ Local Home Assistant control continues as long as Home Assistant, the local netw
 
 Cloud voice assistants and MELCloud Home require Internet access and will not be available during the outage.
 
-The original IR remote continues to control the indoor unit directly.
+The original IR remote should still directly control the indoor unit, but the return synchronization of IR changes into Home Assistant has not yet been tested.
 
 ### Home Assistant/server outage
 
 The local automation is unavailable, but MELCloud Home can still control the unit if Internet/Mitsubishi cloud service is working.
 
-The original IR remote also remains available as a direct local control path.
+The original IR remote should also remain available as a direct local control path.
 
 ### MELCloud outage
 
@@ -246,14 +244,9 @@ The local Home Assistant controller continues without depending on MELCloud.
 
 The original IR remote controls the indoor unit directly and does not depend on Home Assistant, the Home Assistant server or Internet access.
 
-In the tested installation, changes made with the IR remote were propagated by the indoor unit to the MAC-577IF2-E adapter. The local Mitsubishi integration then picked up the changed target, and the existing manual-target synchronization automation updated the Home Assistant desired-temperature helper. MELCloud Home also reflected the changed state.
+The **direct control path itself is expected to remain available**. The untested part is whether and how quickly the resulting changed unit state is then reflected back through the MAC-577IF2-E into Home Assistant, into the desired-temperature helper, and into MELCloud Home.
 
-Practical test procedure:
-
-1. Change the setpoint by 1 °C with the original IR remote.
-2. Watch the local Home Assistant climate entity's `temperature` attribute.
-3. Watch the desired-temperature Number helper.
-4. Confirm MELCloud Home also reaches the same target.
+Do not describe that synchronization path as verified until the practical test above has been completed.
 
 ## 12. Security
 
