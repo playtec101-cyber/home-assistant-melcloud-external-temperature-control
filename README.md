@@ -2,12 +2,7 @@
 
 Home Assistant examples for Mitsubishi Electric air conditioners that use **external room-temperature sensors as the real comfort reference** instead of relying only on the sensor inside the indoor unit.
 
-This repository now documents two primary architectures:
-
-1. **Local-primary control with MELCloud Home as fallback** — recommended when a compatible local adapter/integration is available.
-2. **MELCloud Home primary control** — cloud-based variant.
-
-Legacy MELCloud examples are kept for older installations.
+This repository documents **three different solution paths**. They represent different stages/architectures and are intentionally kept side by side so users can choose the approach that best fits their installation.
 
 > Not affiliated with Mitsubishi Electric, Home Assistant, or the authors of the local custom integration.
 
@@ -15,84 +10,63 @@ Legacy MELCloud examples are kept for older installations.
 
 ---
 
-## New: local Mitsubishi control with MELCloud Home as fallback
+# The three solution paths
 
-Step-by-step guide:
+## 1. Legacy / simulated AUTO with Home Assistant deciding HEAT and COOL
 
-`LOCAL_CONTROL_WITH_MELCLOUD_FALLBACK.md`
+This is the older approach for installations where native Mitsubishi AUTO behavior was not satisfactory.
 
-Tested concept:
+Home Assistant uses the external room-temperature sensor(s) as the real reference and can decide whether the unit should run in:
 
 ```text
-PRIMARY
-Home Assistant -> local LAN/WLAN -> Mitsubishi Wi-Fi adapter -> indoor unit
-
-FALLBACK
-MELCloud Home -> Mitsubishi cloud -> same indoor unit
+HEAT
+or
+COOL
 ```
 
-The tested local custom integration is:
+instead of relying entirely on Mitsubishi's native AUTO decision.
 
-[pymitsubishi/homeassistant-mitsubishi](https://github.com/pymitsubishi/homeassistant-mitsubishi)
+The legacy examples include two related strategies:
 
-It supports Mitsubishi units with the MAC-577IF-2E / MAC-577IF2-E Wi-Fi adapter and exposes climate control, target temperature, HVAC mode, fan control and vane control locally.
+- a direct Home-Assistant-controlled HEAT/COOL switching strategy with hysteresis/stability delay;
+- an initialization strategy where Home Assistant can start in HEAT or COOL based on the external room error and later return to native AUTO.
 
-### Why there is no duplicated 1,100-line controller file
+Relevant legacy files include:
 
-The tested local climate entity exposes the same relevant HVAC states used by the current MELCloud Home controller (`auto`, `heat`, `cool`, `off`) and the same standard Home Assistant climate services.
+- `living_room_multi_sensor.yaml`
+- `bedroom_single_sensor.yaml`
+- `melcloud_refresh_5min.yaml`
+- `optional_horizontal_swing.yaml`
 
-Therefore the **control logic is shared** with:
+These files are mainly for the **classic/legacy MELCloud integration** and should not be copied blindly into MELCloud Home because state names, polling behavior and vane values can differ.
 
-`melcloud_home_external_temperature_control_public.yaml`
+### When this solution is useful
 
-For local-primary operation:
-
-- point the main-room and second-room climate placeholders at the **local Mitsubishi climate entities**;
-- keep MELCloud Home configured only as a fallback/manual path;
-- in the optional horizontal-vane automation use local `center` instead of MELCloud Home `centre`.
-
-This avoids maintaining two almost identical large controller files that could drift apart over time.
-
-### Why this architecture is useful
-
-- A MELCloud API outage does not stop the Home Assistant controller.
-- An Internet/DSL outage does not stop local Home Assistant climate control.
-- If Home Assistant or its server is unavailable but Internet/MELCloud still works, MELCloud Home remains a separate fallback path.
-- MELCloud Home can remain available on phones/tablets for manual control.
-- Manual MELCloud target changes are seen again by the local adapter state and can be copied into the Home Assistant desired-temperature helper.
-- Changes made with the original IR remote were verified to propagate back to the local Home Assistant entity and to MELCloud Home.
-
-The complete local controller and the complete MELCloud controller should **not** both be active against the same devices at the same time. Choose one primary controller.
+- You want Home Assistant to take more control over the heating/cooling decision.
+- Native Mitsubishi AUTO behaves poorly in your room.
+- You are still using the classic MELCloud integration or want to study the older logic.
 
 ---
 
-## MELCloud Home primary variant
+## 2. MELCloud Home primary control with real Mitsubishi AUTO
 
-Current complete public example:
+This is the newer cloud-based controller.
 
-`melcloud_home_external_temperature_control_public.yaml`
+The important difference from solution 1 is that Home Assistant **does not simulate AUTO by switching between HEAT and COOL**.
 
-This variant uses Home Assistant's MELCloud Home climate entities as the primary control path.
-
----
-
-## Core control strategy
-
-The current complete controller keeps the user-selected Mitsubishi HVAC mode unchanged:
+The user-selected Mitsubishi mode stays unchanged:
 
 - `AUTO` stays `AUTO`
 - `HEAT` stays `HEAT`
 - `COOL` stays `COOL`
 
-Home Assistant changes only the target temperature.
+Home Assistant only adjusts the Mitsubishi target temperature from the error between the external room temperature and the desired room temperature.
 
-The real room error is:
+Current complete public example:
 
-```text
-error = external room temperature - desired room temperature
-```
+`melcloud_home_external_temperature_control_public.yaml`
 
-### AUTO mode
+### AUTO correction
 
 AUTO uses fixed 0.5 °C correction steps:
 
@@ -110,7 +84,7 @@ The sign follows the direction of the room error.
 
 ### Fixed HEAT / COOL
 
-HEAT and COOL use the same `±0.25 °C` neutral zone. Outside that zone the correction is linear 1:1:
+HEAT and COOL use the same `±0.25 °C` neutral zone. Outside that neutral zone the correction is linear 1:1:
 
 ```text
 correction = external - desired
@@ -119,30 +93,87 @@ target = internal - correction
 
 The calculated target is limited to the climate entity's supported `min_temp` / `max_temp` and rounded to the nearest `0.5 °C`.
 
----
+### Manual target synchronization
 
-## Manual target synchronization and feedback-loop protection
+Manual target changes reported through MELCloud Home, app or supported voice-control paths can be copied into the desired-temperature helper.
 
-The controller stores the last target that Home Assistant wrote automatically.
+A helper stores the **last automatic target** written by Home Assistant so the controller's own compensated target is not mistaken for a new user request. This is the feedback-loop protection.
 
-A device target change is treated as a genuine user request only when it differs from both:
+### Limitation
 
-1. the last automatically written target, and
-2. the current desired-temperature helper.
-
-That value is then copied into the desired-temperature helper.
-
-This prevents the controller's own compensation target from being interpreted as a new user request.
-
-In the **local-primary architecture**, a manual target change from MELCloud Home reaches the physical unit first. The local integration polls the adapter and reports the changed device target back to Home Assistant, where the same feedback-loop protection applies.
-
-The same path was verified for the original IR remote: the indoor unit updates its state, the MAC-577IF2-E receives that state, Home Assistant picks up the new target locally, and MELCloud Home is updated as well.
+This solution depends on the Mitsubishi cloud/API for the Home Assistant climate entity. If MELCloud Home or the Internet connection is unavailable, the Home Assistant control path is affected.
 
 ---
 
-## Local-primary migration pattern
+## 3. Local-primary Mitsubishi control with MELCloud Home as fallback
 
-A convenient migration from an existing MELCloud Home setup is:
+This is the current local-primary architecture.
+
+Primary path:
+
+```text
+Home Assistant -> local LAN/WLAN -> MAC-577IF2-E -> indoor unit
+```
+
+Fallback/manual path:
+
+```text
+MELCloud Home -> Mitsubishi cloud -> indoor unit
+```
+
+The tested local custom integration is:
+
+[pymitsubishi/homeassistant-mitsubishi](https://github.com/pymitsubishi/homeassistant-mitsubishi)
+
+Step-by-step migration guide:
+
+`LOCAL_CONTROL_WITH_MELCLOUD_FALLBACK.md`
+
+### Why this differs from solution 2
+
+The **regulation logic is essentially the same as solution 2**: native Mitsubishi AUTO stays AUTO, and Home Assistant adjusts the target temperature from the external room-temperature error.
+
+The difference is the communication path. Normal automation commands no longer need the Mitsubishi cloud because Home Assistant talks directly to the MAC-577IF2-E over the local network.
+
+MELCloud Home remains configured as a separate fallback/manual control path.
+
+### Failure behavior
+
+- Internet/DSL outage: local Home Assistant control continues as long as Home Assistant, LAN/WLAN and the adapter are available.
+- MELCloud API outage: local Home Assistant control continues.
+- Home Assistant/server outage with Internet OK: MELCloud Home remains available as a manual fallback.
+- MELCloud Home can still be used from phones/tablets when the cloud path is available.
+
+### Bidirectional synchronization tested
+
+The following two directions were tested:
+
+```text
+Home Assistant local -> indoor unit -> MELCloud Home
+```
+
+and
+
+```text
+MELCloud Home -> indoor unit -> local Home Assistant climate entity
+```
+
+This allows a manual MELCloud target change to be seen by the local entity and then handled by the same desired-temperature / feedback-loop logic.
+
+### Horizontal vane difference
+
+In the tested setup:
+
+```text
+MELCloud Home center: centre
+local integration center: center
+```
+
+Both used `swing` for horizontal swing.
+
+### Entity-ID migration option
+
+A convenient migration pattern is:
 
 ```text
 old MELCloud entity:
@@ -152,35 +183,43 @@ new local entity:
 climate.generated_local_name -> climate.room
 ```
 
-This lets existing automations continue using the old primary entity ID while the underlying control path becomes local.
+Existing automations can then keep using `climate.room`, while the underlying control path becomes local.
 
-Alternatively, keep explicit names such as:
-
-```text
-climate.hauptraum_ac_local
-climate.nebenraum_ac_local
-```
-
-and replace the placeholders in the public controller YAML accordingly.
+Do **not** run two complete automation controllers against the same physical unit at the same time. MELCloud Home may remain configured as fallback, but only one main automation controller should be active.
 
 ---
 
-## Horizontal vane values
+# Original Mitsubishi infrared remote
 
-The two integrations expose a different spelling for the horizontal center position in the tested setup:
+The original Mitsubishi IR remote should continue to control the indoor unit directly in all three architectures because it talks to the indoor unit independently of Home Assistant.
 
-- MELCloud Home: `centre`
-- local `pymitsubishi/homeassistant-mitsubishi`: `center`
+However, this project has **not yet tested the return synchronization path from the IR remote**.
 
-Both use `swing` for horizontal swing in the tested setup.
+In particular, we do not yet claim as verified how quickly or reliably an IR-made change is reflected back into:
 
-Always check the values exposed by your own climate entity before enabling optional vane automation.
+- the legacy MELCloud Home Assistant entity in solution 1;
+- the MELCloud Home entity in solution 2;
+- the local MAC-577IF2-E Home Assistant entity in solution 3;
+- the desired-temperature helper;
+- MELCloud Home after an IR change.
+
+For solution 3, it is technically plausible that the changed indoor-unit state is reported through the MAC-577IF2-E and then read locally by Home Assistant, but this should be treated as **expected/possible, not tested**, until verified on the real installation.
+
+A useful test is:
+
+1. Change the target by 1 °C with the original IR remote.
+2. Watch the active Home Assistant climate entity's `temperature` attribute.
+3. Watch the desired-temperature helper.
+4. Check whether MELCloud Home reaches the same value.
+5. Record the approximate delay.
+
+Feedback from users who test this path is welcome.
 
 ---
 
-## Optional auxiliary-heating example
+# Optional auxiliary-heating example
 
-The complete public YAML also contains generalized optional logic for:
+The complete current controller also contains generalized optional logic for:
 
 - two auxiliary thermostat/climate entities
 - 25-minute heating-demand release
@@ -194,63 +233,40 @@ The complete public YAML also contains generalized optional logic for:
 
 These temperatures, schedules and entity IDs are examples. Review them before use.
 
-If you only need the Mitsubishi external-temperature controller, remove the optional auxiliary-heating and away-mode sections.
-
 ---
 
-## Installation summary
+# Installation summary
 
 1. Back up Home Assistant.
-2. Choose **one** primary architecture: local or MELCloud Home.
-3. Create/choose external room-temperature sensors.
-4. Create the desired-temperature and last-automatic-target Number helpers.
-5. Replace the neutral placeholder entity IDs in `melcloud_home_external_temperature_control_public.yaml`.
-6. For local-primary operation, point the climate placeholders to the local Mitsubishi entities and change optional horizontal center from `centre` to `center`.
-7. Check supported HVAC modes, `current_temperature`, target-temperature range and vane values.
-8. Add the automations to Home Assistant.
-9. Reload automations or restart Home Assistant.
-10. Test one room and one control path at a time.
-
-For the local-primary architecture, follow `LOCAL_CONTROL_WITH_MELCLOUD_FALLBACK.md` first.
+2. Choose **one** of the three solution paths above.
+3. Create or choose the external room-temperature sensor(s).
+4. Create the desired-temperature and last-automatic-target Number helpers required by the selected controller.
+5. Replace the neutral placeholder entity IDs in the example YAML.
+6. Check supported HVAC states, `current_temperature`, target-temperature range and vane values.
+7. For local-primary operation, point the climate placeholders to the local Mitsubishi entities and use `center` instead of MELCloud Home `centre` for optional horizontal center.
+8. Add/reload the automations or restart Home Assistant.
+9. Test one room and one control path at a time.
 
 ---
 
-## Original Mitsubishi infrared remote
-
-The original Mitsubishi IR remote was tested with the local-primary setup.
-
-Verified signal path:
-
-```text
-IR remote -> indoor-unit control board -> internal interface/CN105 -> MAC-577IF2-E
-```
-
-The changed target was then reflected in the local Home Assistant climate entity, the desired-temperature helper through the existing manual-target synchronization automation, and MELCloud Home.
-
-In the tested setup, the local Home Assistant value followed the IR change within seconds.
-
-The IR remote therefore remains a direct control path that does not depend on the Home Assistant server or Internet access.
-
----
-
-## Files
+# Files
 
 | File | Purpose |
 | --- | --- |
+| `melcloud_home_external_temperature_control_public.yaml` | Complete current real-AUTO controller used for MELCloud Home primary or adapted to local-primary control |
 | `LOCAL_CONTROL_WITH_MELCLOUD_FALLBACK.md` | Local-primary architecture, migration and test guide |
-| `melcloud_home_external_temperature_control_public.yaml` | Complete current controller; use local or MELCloud climate entities as described above |
-| `helpers_example.yaml` | Generic helper examples |
-| `living_room_multi_sensor.yaml` | Legacy MELCloud multi-sensor example |
-| `bedroom_single_sensor.yaml` | Legacy MELCloud bedroom example |
+| `living_room_multi_sensor.yaml` | Legacy MELCloud external-sensor / AUTO example |
+| `bedroom_single_sensor.yaml` | Legacy MELCloud Home-Assistant-controlled HEAT/COOL example |
 | `melcloud_refresh_5min.yaml` | Optional forced refresh for legacy MELCloud only |
 | `optional_horizontal_swing.yaml` | Legacy/device-dependent horizontal swing example |
+| `helpers_example.yaml` | Generic helper examples |
 | `FORUM_POST_LOCAL_EN.md` | Ready-to-adapt English forum post for the local-primary architecture |
 | `SECURITY_PRIVACY.md` | Security and privacy notes |
 | `VALIDATION.txt` | Validation notes |
 
 ---
 
-## Security and privacy
+# Security and privacy
 
 The public examples intentionally contain no passwords, cloud credentials, Home Assistant tokens, API keys, webhook IDs, MAC addresses, e-mail addresses, personal names, local IP addresses or private hostnames.
 
@@ -260,11 +276,12 @@ Before publishing your own adapted configuration, scan it again for credentials 
 
 ---
 
-## Feedback
+# Feedback
 
 Useful feedback includes:
 
 - Home Assistant version
+- selected solution path (1, 2 or 3)
 - local integration version or MELCloud/MELCloud Home variant
 - Mitsubishi indoor-unit model
 - Wi-Fi adapter model
@@ -273,7 +290,7 @@ Useful feedback includes:
 - MELCloud-to-local synchronization delay
 - horizontal-vane behavior
 - behavior during Internet or Home Assistant outages
-- IR-remote synchronization behavior
+- IR-remote synchronization behavior, if tested
 
 Please do not post credentials, access tokens, e-mail addresses or private network information.
 
