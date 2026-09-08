@@ -38,21 +38,19 @@ I then changed the target in MELCloud Home. The unit reacted and the local Home 
 
 That is important because the existing manual-target synchronization logic still works: a manual MELCloud change can be copied into the desired-temperature helper without creating a feedback loop.
 
-## IR remote also tested
+## IR remote: direct control expected, return synchronization not yet tested
 
-The original Mitsubishi IR remote also works with this architecture.
+The original Mitsubishi IR remote should continue to control the indoor unit directly because that path does not depend on Home Assistant or Internet access.
 
-The tested signal flow is:
+What I have **not yet tested** is whether and how quickly a target change made with the IR remote is then reflected back into:
 
-```text
-IR remote -> indoor-unit control board -> internal interface/CN105 -> MAC-577IF2-E
-```
+- the local Home Assistant climate entity,
+- the desired-temperature helper,
+- and MELCloud Home.
 
-The MAC-577IF2-E receives the changed unit state. The local Home Assistant integration then sees the changed target, the manual-target synchronization automation updates the desired-temperature helper, and MELCloud Home also reflects the change.
+For the local architecture it is technically plausible that the indoor unit updates the MAC-577IF2-E state and that Home Assistant reads the changed value locally, but I am treating that as expected/possible rather than verified until I test it on the real installation.
 
-In my tested setup the local Home Assistant state followed the IR change within seconds.
-
-This also means the IR remote remains an independent direct control path if both Home Assistant and Internet are unavailable.
+A simple test is to change the target by 1 °C with the IR remote and watch the Home Assistant `temperature` attribute, the desired-temperature helper and MELCloud Home.
 
 ## No second competing controller
 
@@ -97,9 +95,9 @@ The existing YAML can then keep referring to `climate.room`, but the underlying 
 - Internet/DSL down: local Home Assistant control still works.
 - MELCloud API down: local Home Assistant control still works.
 - Home Assistant/server down, Internet OK: MELCloud Home can be used as fallback.
-- Both HA and Internet down: original IR remote still directly controls the indoor unit.
+- Both HA and Internet down: the original IR remote should still directly control the indoor unit; return synchronization has not yet been tested.
 
-The public example and the local-primary migration guide are in this repository:
+The public examples, all three solution paths and the local-primary migration guide are in this repository:
 
 https://github.com/playtec101-cyber/home-assistant-melcloud-external-temperature-control
 
