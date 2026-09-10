@@ -46,27 +46,41 @@ Home Assistant only compensates the Mitsubishi target temperature from the diffe
 
 This preserves Mitsubishi's own inverter, compressor, fan and AUTO decision logic.
 
-## 3. Why `hvac_action` matters
+## 3. What `hvac_action` actually tells us
 
-A climate entity state such as `auto` only tells us the selected HVAC mode. It does not say whether the unit is currently heating, cooling or waiting.
+The selected climate mode and the current operating action are different things.
 
-The local integration exposes the current operating action through Home Assistant `hvac_action`. The auxiliary-heating rule is deliberately strict:
+The local integration exposes `hvac_action`. Its implementation first checks whether the compressor is operating. If it is not operating, the integration returns `idle`. Only while the compressor is operating does AUTO resolve to `heating` or `cooling` from Mitsubishi's internal AUTO state.
+
+That means:
+
+> `AUTO + idle` does **not** mean "the room no longer needs heat" and it does not tell us whether the previous active phase was heating or cooling. It means only that the compressor is currently not operating.
+
+This matters for auxiliary heat. Treating `idle` as a hard heating block can switch auxiliary heat off exactly while an external room sensor still shows genuine heating demand.
+
+The current permission model is therefore:
 
 ```text
-HEAT                  -> auxiliary heating may be allowed
-AUTO + heating        -> auxiliary heating may be allowed
-AUTO + cooling        -> auxiliary heating blocked
-AUTO + idle           -> auxiliary heating blocked
-AUTO + unknown/None   -> auxiliary heating blocked (fail-safe)
-COOL                  -> auxiliary heating blocked
-OFF                   -> auxiliary heating blocked, except the separate winter reserve
+HEAT                  -> auxiliary heat may be allowed
+AUTO + heating        -> auxiliary heat may be allowed
+AUTO + idle           -> neutral: auxiliary heat may be allowed if external demand conditions say so
+AUTO + cooling        -> hard block
+AUTO + unknown/None   -> hard block (fail-safe)
+COOL / DRY / FAN      -> hard block
+OFF                   -> normal auxiliary heat blocked; separate winter reserve may apply
 ```
 
-This prevents an auxiliary radiator from fighting the air conditioner while AUTO has internally chosen cooling.
+`idle` is **not** interpreted as heating. It is merely no longer used as a blanket block. The external room-temperature, outdoor-temperature, timing and hysteresis rules still decide whether auxiliary heat actually starts.
 
-Long-term reliability of `hvac_action` should still be observed on each real installation over multiple AUTO heating/cooling/idle cycles.
+## 4. Why `AUTO + cooling` remains a hard block
 
-## 4. Desired temperature is authoritative
+This state is unambiguous: the Mitsubishi is actively cooling.
+
+Radiator or electric auxiliary heating must not run against it, regardless of the external heating thresholds. A transition from `idle`/`heating` to `cooling` therefore immediately invalidates auxiliary-heating permission.
+
+An unclear AUTO action (`None`, switching, unavailable) is also fail-safe blocked because we cannot prove that heating assistance is safe.
+
+## 5. Desired temperature is authoritative
 
 An earlier design copied target-temperature changes reported by the climate device back into the desired-temperature helper.
 
@@ -84,7 +98,7 @@ If a user wants to change the real desired room temperature, a dashboard, script
 
 The `last_automatic_target` helper remains only to mark the controller's own writes, avoid unnecessary repeats and support the periodic target-delivery retry. It no longer authorizes device-target-to-helper back-synchronization.
 
-## 5. Temperature-compensation algorithm
+## 6. Temperature-compensation algorithm
 
 The room error is:
 
@@ -94,7 +108,7 @@ error = external_room_temperature - desired_room_temperature
 
 ### AUTO
 
-AUTO uses fixed 0.5 °C correction steps:
+AUTO currently keeps the established fixed 0.5 °C correction steps:
 
 | Absolute room error | Correction magnitude |
 | --- | ---: |
@@ -107,6 +121,22 @@ AUTO uses fixed 0.5 °C correction steps:
 | `> 2.75 °C` | `3.0 °C` |
 
 The sign follows the direction of the room error.
+
+### Why the AUTO curve was not steepened after the latest test
+
+During one test the external room reference was clearly above the desired temperature while the Mitsubishi remained `AUTO + idle` for a period. This initially looked like a stuck AUTO decision.
+
+Without Home Assistant changing HVAC mode, the same unit later transitioned from `idle` to `cooling` while remaining in native AUTO. That observation is important: it shows that an `idle` period can simply be part of Mitsubishi's own AUTO/inverter timing rather than proof that the current offset curve is too weak.
+
+Therefore the controller does **not** yet increase the AUTO correction curve and does not add an AUTO->COOL/HEAT override. More observations over longer periods are preferable before changing a curve that otherwise behaves correctly.
+
+A useful diagnostic is to display:
+
+```jinja2
+{{ state_attr('climate.main_room_ac', 'hvac_action') }}
+```
+
+on a temporary Home Assistant dashboard Markdown card and compare it with external room temperature, desired temperature, internal Mitsubishi temperature and the compensated device target.
 
 ### HEAT and COOL
 
@@ -125,16 +155,16 @@ If desired, external or internal temperatures are invalid, the controller does n
 
 All numeric template conversions use explicit `float(...)` defaults to avoid template errors during startup or temporary `unknown`/`unavailable` states.
 
-## 6. Auxiliary radiator thermostats
+## 7. Auxiliary radiator thermostats
 
 The focused public example includes two optional auxiliary radiator thermostat entities. They are subordinate to the Mitsubishi system.
 
 A release is possible only when:
 
 - away mode is off;
-- Mitsubishi is in `heat`, or in `auto` with `hvac_action == heating`;
+- Mitsubishi is in `heat`, or in `auto` with `hvac_action` equal to `heating` **or** `idle`;
 - the room reference is at least `0.5 °C` below desired;
-- outdoor temperature is `<= 20 °C`;
+- outdoor temperature is valid and `<= 20 °C`;
 - outdoor temperature is not warmer than the room reference;
 - the condition remains true for 25 minutes.
 
@@ -148,7 +178,13 @@ desired room temperature - 1.0 °C
 
 A larger 1.5 °C separation can be too passive after the 25-minute delay and 0.5 °C demand threshold are already applied. A 1.0 °C separation keeps Mitsubishi clearly primary while allowing useful assistance. This is still a tuning value, not a universal rule.
 
-## 7. Why the 25-minute `for:` is intentionally not restart-persistent
+### Why the 25-minute timer survives AUTO idle
+
+The release template stays true when AUTO changes from `heating` to `idle`, provided all external demand conditions remain true. Therefore an ordinary `heating -> idle` transition does not by itself reset the 25-minute demand period.
+
+A transition to `cooling`, an unclear AUTO action, invalid sensors, unsuitable outdoor conditions or loss of external heating demand makes the template false and correctly cancels the pending release.
+
+## 8. Why the 25-minute `for:` is intentionally not restart-persistent
 
 Home Assistant resets a trigger `for:` duration when automations are reloaded or Home Assistant restarts.
 
@@ -156,7 +192,7 @@ For this use case that behavior is accepted deliberately. After a restart, the a
 
 A restart-persistent implementation would require another timestamp/helper and more state handling. The current design chooses the simpler fail-safe behavior.
 
-## 8. Strict separation between AC-active and AC-off radiator logic
+## 9. Strict separation between AC-active and AC-off radiator logic
 
 Two automations control mutually exclusive scopes:
 
@@ -169,7 +205,7 @@ This separation is intentional. Earlier versions could let overlapping automatio
 
 The current design removes that overlap at the architecture level rather than relying on action ordering.
 
-## 9. Night reserve when the main AC is OFF
+## 10. Night reserve when the main AC is OFF
 
 When the main Mitsubishi is OFF, the radiator thermostats may provide a low-level winter reserve.
 
@@ -187,35 +223,33 @@ If outdoor temperature is valid and `<= 20 °C`, the example sets the auxiliary 
 
 Home Assistant is the source of truth for this target. Vendor comfort/eco schedules are not required for the logic.
 
-## 10. Daytime winter reserve when the main AC is OFF
+## 11. Daytime winter reserve when the main AC is OFF
 
 During the day, the radiator thermostats normally remain off when the Mitsubishi is off.
 
-A separate reserve starts only if the room falls below:
+A separate reserve starts only if:
 
-```text
-16.0 °C
-```
+- room temperature falls below `16.0 °C`;
+- outdoor temperature is valid and `<= 20 °C`;
+- away mode is off.
 
-Once started, it remains active until the room reaches:
+Once started, it remains active until the room reaches `18.0 °C`, the outdoor value becomes invalid/too warm, the main AC is switched on or away mode is enabled.
 
-```text
-18.0 °C
-```
+A dedicated Boolean helper stores the reserve state. This gives a wide 16 -> 18 °C hysteresis and avoids rapid on/off cycling around the start threshold.
 
-A dedicated Boolean helper stores that reserve state. This gives a wide 16 -> 18 °C hysteresis and avoids rapid on/off cycling around the start threshold.
-
-## 11. Separate switch-controlled auxiliary heater in the fuller production design
+## 12. Separate switch-controlled auxiliary heater in the fuller production design
 
 The fuller production design can additionally contain a switch-controlled heater with its own room-reference sensor. The focused public YAML intentionally does **not** include that heater block.
 
-A suitable production rule is:
+The same safety interpretation applies:
 
-- away mode off;
-- `heat`, or `auto + heating`;
-- valid heater-reference temperature;
-- optional outdoor-temperature limits;
-- automatic stop when permission disappears.
+```text
+HEAT -> may run after its own demand conditions
+AUTO + heating -> may run after its own demand conditions
+AUTO + idle -> may run after its own external demand conditions
+AUTO + cooling / unclear -> blocked
+COOL / OFF -> blocked
+```
 
 A manual/voice-started run can be limited to four hours with an absolute deadline stored in `input_datetime`, for example:
 
@@ -225,13 +259,13 @@ timestamp: "{{ as_timestamp(now()) + 14400 }}"
 
 Using an absolute UNIX timestamp is intentional because the stored deadline survives midnight and Home Assistant restarts. A fixed time such as 23:00 can remain a one-time hard shutdown event.
 
-## 12. Away mode
+## 13. Away mode
 
 The focused public YAML uses away mode as a hard permission condition for auxiliary heating.
 
 A fuller production configuration may additionally perform explicit shutdown/retry actions for Mitsubishi units, radiator thermostats, auxiliary heaters and release/reserve markers. `continue_on_error` is useful so one unavailable device does not prevent the remaining safety actions.
 
-## 13. Horizontal vane spelling
+## 14. Horizontal vane spelling
 
 The tested local integration uses:
 
@@ -247,13 +281,13 @@ centre
 
 This spelling difference is integration-specific and is a common migration trap.
 
-## 14. Safety retry
+## 15. Safety retry
 
 The main target controller periodically checks whether the climate entity actually reports the calculated target. If it differs, the target is sent again.
 
 This is a target-delivery safety retry, not the older forced MELCloud `update_entity` workaround.
 
-## 15. Required neutral helper entities
+## 16. Required neutral helper entities
 
 See `local_primary_helpers_example.yaml`.
 
@@ -269,14 +303,18 @@ input_boolean.away_mode
 
 The two auxiliary radiator climate entities, main-room climate entity, external room-temperature sensor and weather entity are neutral placeholders that must also be replaced.
 
-## 16. Validation status
+## 17. Validation status
 
 For the public 2026-09-10 focused local-primary example:
 
-- YAML syntax validated;
 - 6 automations;
 - 6 unique automation IDs;
-- no bare `| float` conversions without defaults;
+- no device-target-to-desired-helper back-synchronization;
+- AUTO target-correction curve unchanged;
+- AUTO `idle` is neutral for auxiliary-heating permission, not a hard block;
+- AUTO `cooling` and unclear AUTO action are hard blocks;
+- daytime and nighttime AC-OFF winter reserve require valid outdoor temperature `<= 20 °C`;
+- numeric conversions use explicit defaults;
 - generic entity IDs only;
 - no private IP addresses, MAC addresses, e-mail addresses, account names, API tokens or private hostnames included.
 
