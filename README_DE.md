@@ -65,21 +65,25 @@ Migrations- und Testanleitung:
 
 ### Die wichtigsten Änderungen der lokalen Version
 
-Der native AUTO-Modus bleibt erhalten. Neu ist aber, dass optionale Zusatzheizungen nicht mehr allein anhand des gewählten Modus freigegeben werden.
+Der native AUTO-Modus bleibt erhalten. Home Assistant korrigiert weiterhin nur den Geräte-Sollwert anhand der externen Raumtemperatur.
 
-Die lokale Integration stellt `hvac_action` bereit. Dadurch kann unterschieden werden zwischen:
+Die lokale Integration liefert zusätzlich `hvac_action`. Entscheidend ist die neue Interpretation von `idle`:
 
 ```text
+HEAT            -> Zusatzheizung darf nach weiteren Bedingungen helfen
 AUTO + heating  -> Zusatzheizung darf nach weiteren Bedingungen helfen
-AUTO + cooling  -> Zusatzheizung bleibt AUS
-AUTO + idle     -> Zusatzheizung bleibt AUS
-AUTO + unklar   -> Zusatzheizung bleibt AUS
-HEAT            -> heizberechtigt
-COOL            -> Zusatzheizung AUS
-OFF             -> Zusatzheizung AUS, außer separate Winterreserve
+AUTO + idle     -> neutral: Zusatzheizung darf nur dann helfen, wenn die externen Bedarfsbedingungen erfüllt sind
+AUTO + cooling  -> harte Sperre
+AUTO + unklar   -> harte Sperre
+COOL/DRY/FAN    -> harte Sperre
+OFF             -> normale Zusatzheizung aus, nur separate Winterreserve möglich
 ```
 
-Damit können Klimaanlage und Zusatzheizung im AUTO-Modus nicht mehr gegeneinander arbeiten.
+`idle` wird **nicht** als Heizen interpretiert. Es ist lediglich kein pauschaler Sperrzustand mehr. Hintergrund: Die lokale Integration liefert `idle`, sobald der Verdichter gerade nicht arbeitet. Daraus folgt nicht, dass der externe Raum bereits auf Wunschtemperatur ist.
+
+Damit bleiben die externen Sensoren entscheidend: FRITZ!-Zusatzheizung nur bei echter Untertemperatur und nach 25 Minuten; ein separater Zusatzheizer nur nach seiner eigenen Temperaturbedingung.
+
+`AUTO + cooling` bleibt dagegen immer gesperrt, damit Klimaanlage und Zusatzheizung nie gegeneinander arbeiten.
 
 ### Wunschtemperatur ist autoritativ
 
@@ -87,7 +91,7 @@ Die lokale Version schreibt Geräte-Sollwertänderungen bewusst **nicht** mehr z
 
 Grund: Automatische Sollwertkorrekturen und verzögerte Geräte-Rückmeldungen können sich zeitlich überholen. Dadurch kann ein Zwischenwert fälschlich als neuer Benutzerwunsch interpretiert werden und eine Rückkopplungsschleife entstehen.
 
-Deshalb gilt jetzt:
+Deshalb gilt:
 
 ```text
 Wunschtemperatur-Helfer = Benutzerwunsch / Quelle der Wahrheit
@@ -97,6 +101,8 @@ Klima-Sollwert           = automatisch kompensierter Gerätewert
 Der Helfer für den zuletzt automatisch gesetzten Zielwert bleibt nur zur Erkennung eigener Schreibvorgänge, zur Vermeidung unnötiger Wiederholungen und für den Sicherheits-Retry erhalten.
 
 ### AUTO-Korrektur
+
+Die bisherige AUTO-Kennlinie bleibt unverändert:
 
 | Absolute Raumabweichung | Korrektur |
 | --- | --- |
@@ -110,11 +116,27 @@ Der Helfer für den zuletzt automatisch gesetzten Zielwert bleibt nur zur Erkenn
 
 HEAT und COOL verwenden dieselbe Neutralzone von ±0,25 °C und außerhalb davon eine lineare 1:1-Korrektur.
 
+### Warum die AUTO-Kennlinie vorerst nicht verschärft wurde
+
+Bei einem Praxistest am 10.09.2026 lag die externe Raumtemperatur deutlich über der Wunschtemperatur, während `hvac_action` eine Zeit lang `idle` meldete. Zunächst sah das nach einer zu schwachen AUTO-Anregung aus.
+
+Ohne dass Home Assistant den HVAC-Modus änderte, wechselte die Mitsubishi anschließend selbstständig von `idle` auf `cooling` und blieb dabei vollständig im nativen AUTO-Modus.
+
+Darum wurde die Kennlinie **nicht vorschnell steiler gemacht** und es gibt weiterhin keinen erzwungenen AUTO->COOL/HEAT-Fallback. Erst mehrere reale Zyklen sollen zeigen, ob eine Änderung überhaupt nötig ist.
+
+Zum Beobachten kann eine temporäre Markdown-Karte verwendet werden:
+
+```jinja2
+HVAC Action: **{{ state_attr('climate.hauptraum_ac', 'hvac_action') }}**
+```
+
 ### Optionale Zusatzthermostate
 
 Die neutrale Beispielkonfiguration enthält zwei optionale Heizkörper-/Zusatzthermostate.
 
-Freigabe erst nach 25 Minuten stabiler Untertemperatur von mindestens 0,5 °C, nur bei echter Heizfreigabe und geeigneter Außentemperatur. Bei Freigabe wird als Beispiel `Wunsch - 1,0 °C` gesetzt.
+Freigabe erst nach 25 Minuten stabiler Untertemperatur von mindestens 0,5 °C, nur bei HEAT oder AUTO mit `heating`/`idle` und nur bei geeigneter Außentemperatur. Bei Freigabe wird als Beispiel `Wunsch - 1,0 °C` gesetzt.
+
+Ein Wechsel `heating -> idle` setzt den 25-Minuten-Zähler nicht allein deshalb zurück, solange der externe Heizbedarf weiterhin besteht. `cooling`, unklarer AUTO-Zustand oder der Wegfall einer externen Bedingung beendet die Freigabe dagegen sofort.
 
 Der 25-Minuten-`for:`-Trigger beginnt nach einem Home-Assistant-Neustart bewusst neu. Das kann Zusatzheizung nur verzögern, niemals zu früh einschalten.
 
@@ -124,15 +146,19 @@ Wenn die Hauptklima AUS ist:
 
 - nachts 23:00–08:00: Beispielziel 18 °C bei gültiger Außentemperatur <=20 °C;
 - tagsüber normalerweise AUS;
-- fällt die Raumtemperatur unter 16 °C, startet eine Tages-Winterreserve und hält bis 18 °C.
+- fällt die Raumtemperatur unter 16 °C und ist die Außentemperatur gültig <=20 °C, startet eine Tages-Winterreserve und hält bis 18 °C.
+
+Die Reserve endet ebenfalls bei ungültiger/zu warmer Außentemperatur, eingeschalteter Hauptklima oder Abwesenheit.
 
 Die Klima-AUS-Winterlogik und die Klima-NICHT-AUS-Zusatzlogik sind hart getrennt, damit nicht zwei Automationen gleichzeitig dieselben Thermostate ansteuern.
 
 ### Separater Zusatzheizer
 
-Ein optionaler schaltbarer Zusatzheizer darf automatisch nur bei HEAT oder AUTO+heating laufen. Ein manueller Lauf ist auf vier Stunden begrenzt. Der absolute Endzeitpunkt wird in einem `input_datetime` gespeichert und bleibt damit über Neustarts erhalten.
+Der vollständige Produktionsaufbau kann zusätzlich einen schaltbaren Zusatzheizer enthalten. Für ihn gilt dieselbe AUTO-Interpretation: HEAT sowie AUTO+heating/idle dürfen nach den eigenen externen Bedingungen freigeben; AUTO+cooling/unklar sowie COOL/OFF sperren.
 
-23:00 bleibt ein einmaliges hartes Abschaltereignis.
+Ein manueller Lauf kann auf vier Stunden begrenzt werden. Der absolute Endzeitpunkt wird in einem `input_datetime` gespeichert und bleibt damit über Neustarts erhalten.
+
+23:00 kann ein einmaliges hartes Abschaltereignis bleiben.
 
 ### Template-Sicherheit
 
@@ -156,4 +182,4 @@ Nicht zwei vollständige Hauptregelungen gleichzeitig gegen dieselben Klimagerä
 
 Die veröffentlichten Beispiele enthalten keine IP-Adressen, Passwörter, Tokens, API-Keys, E-Mail-Adressen, MAC-Adressen, privaten Hostnamen oder persönlichen Namen. Entity-IDs sind neutrale Platzhalter.
 
-Das Langzeitverhalten von `hvac_action` sollte auf jeder Installation über mehrere echte AUTO-Heiz-/Kühl-/Idle-Zyklen beobachtet werden.
+Das Verhalten von `hvac_action` sollte über mehrere echte AUTO-Heiz-/Kühl-/Idle-Zyklen beobachtet werden, bevor die AUTO-Kennlinie weiter verändert wird.
