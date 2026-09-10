@@ -1,0 +1,27 @@
+# Neutral helper examples for local_primary_hvac_action_aux_heating_example.yaml
+# These helpers can also be created in the Home Assistant UI.
+
+input_number:
+  desired_temperature_main_room:
+    name: Desired Temperature Main Room
+    min: 16
+    max: 30
+    step: 0.5
+    unit_of_measurement: "°C"
+
+  last_automatic_target_main_room:
+    name: Last Automatic Target Main Room
+    min: 16
+    max: 30
+    step: 0.5
+    unit_of_measurement: "°C"
+
+input_boolean:
+  aux_radiator_release:
+    name: Auxiliary Radiator Release
+
+  aux_winter_reserve:
+    name: Auxiliary Winter Reserve
+
+  away_mode:
+    name: Away Mode
