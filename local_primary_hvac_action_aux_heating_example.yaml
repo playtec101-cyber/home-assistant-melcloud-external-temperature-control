@@ -1,0 +1,355 @@
+# Neutral public example for the current local-primary design.
+# Replace all entity IDs before use. No private installation data is included.
+# Full rationale: LOCAL_CONTROLLER_DESIGN_NOTES.md
+
+- id: local_main_room_external_temperature_control
+  alias: 'Local AC: external-room target control'
+  mode: restart
+  triggers:
+    - trigger: state
+      entity_id: input_number.desired_temperature_main_room
+      id: desired
+    - trigger: state
+      entity_id: sensor.main_room_reference_temperature
+      id: room
+    - trigger: state
+      entity_id: climate.main_room_ac
+      attribute: current_temperature
+      id: internal
+    - trigger: state
+      entity_id: climate.main_room_ac
+      to: auto
+      id: mode_auto
+    - trigger: state
+      entity_id: climate.main_room_ac
+      to: heat
+      id: mode_heat
+    - trigger: state
+      entity_id: climate.main_room_ac
+      to: cool
+      id: mode_cool
+    - trigger: time_pattern
+      minutes: /5
+      id: safety_retry
+  conditions:
+    - condition: state
+      entity_id: climate.main_room_ac
+      state: [auto, heat, cool]
+  action:
+    - variables:
+        raw_target: >-
+          {% set desired_raw = states('input_number.desired_temperature_main_room') %}
+          {% set external_raw = states('sensor.main_room_reference_temperature') %}
+          {% set internal = state_attr('climate.main_room_ac', 'current_temperature') %}
+          {% set mode = states('climate.main_room_ac') %}
+          {% set min_raw = state_attr('climate.main_room_ac', 'min_temp') %}
+          {% set max_raw = state_attr('climate.main_room_ac', 'max_temp') %}
+          {% set min_temp = (min_raw | float(0)) if is_number(min_raw) else 16.0 %}
+          {% set max_temp = (max_raw | float(0)) if is_number(max_raw) else 30.0 %}
+          {% if is_number(desired_raw) and is_number(external_raw) and is_number(internal) %}
+            {% set desired = desired_raw | float(0) %}
+            {% set external = external_raw | float(0) %}
+            {% set internal_temp = internal | float(0) %}
+            {% set error = external - desired %}
+            {% set abs_error = error | abs %}
+            {% if abs_error <= 0.25 %}
+              {% set correction = 0.0 %}
+            {% elif mode in ['heat', 'cool'] %}
+              {% set correction = error %}
+            {% elif abs_error <= 0.75 %}
+              {% set correction = 0.5 if error > 0 else -0.5 %}
+            {% elif abs_error <= 1.25 %}
+              {% set correction = 1.0 if error > 0 else -1.0 %}
+            {% elif abs_error <= 1.75 %}
+              {% set correction = 1.5 if error > 0 else -1.5 %}
+            {% elif abs_error <= 2.25 %}
+              {% set correction = 2.0 if error > 0 else -2.0 %}
+            {% elif abs_error <= 2.75 %}
+              {% set correction = 2.5 if error > 0 else -2.5 %}
+            {% else %}
+              {% set correction = 3.0 if error > 0 else -3.0 %}
+            {% endif %}
+            {% set calculated = internal_temp - correction %}
+            {% set clamped = [[calculated, min_temp] | max, max_temp] | min %}
+            {{ ((clamped * 2) | round) / 2 }}
+          {% else %}
+            {{ none }}
+          {% endif %}
+    - choose:
+        - conditions:
+            - condition: template
+              value_template: "{{ raw_target not in [none, 'None', 'unknown', 'unavailable', ''] }}"
+          sequence:
+            - action: input_number.set_value
+              target:
+                entity_id: input_number.last_automatic_target_main_room
+              data:
+                value: "{{ raw_target }}"
+            - action: climate.set_temperature
+              target:
+                entity_id: climate.main_room_ac
+              data:
+                temperature: "{{ raw_target }}"
+
+# Desired temperature is intentionally NOT copied back from the climate entity.
+# input_number.desired_temperature_main_room is the authoritative user intent.
+
+- id: local_aux_radiator_release_start
+  alias: 'Aux heat: release after stable real heating demand'
+  mode: single
+  triggers:
+    - trigger: template
+      id: demand_25min
+      value_template: >-
+        {% set mode = states('climate.main_room_ac') %}
+        {% set action = state_attr('climate.main_room_ac', 'hvac_action') %}
+        {% set heating_allowed = mode == 'heat' or (mode == 'auto' and action == 'heating') %}
+        {% set room = states('sensor.main_room_reference_temperature') %}
+        {% set desired = states('input_number.desired_temperature_main_room') %}
+        {% set outside = state_attr('weather.home', 'temperature') %}
+        {{ heating_allowed
+           and is_number(room)
+           and is_number(desired)
+           and is_number(outside)
+           and (room | float(0)) <= ((desired | float(0)) - 0.5)
+           and (outside | float(0)) <= 20.0
+           and (outside | float(0)) <= (room | float(0)) }}
+      for:
+        minutes: 25
+  conditions:
+    - condition: state
+      entity_id: input_boolean.away_mode
+      state: 'off'
+    - condition: state
+      entity_id: input_boolean.aux_radiator_release
+      state: 'off'
+  action:
+    - action: input_boolean.turn_on
+      target:
+        entity_id: input_boolean.aux_radiator_release
+
+- id: local_aux_radiator_release_stop
+  alias: 'Aux heat: revoke release immediately when heating is no longer valid'
+  mode: restart
+  triggers:
+    - trigger: state
+      entity_id: climate.main_room_ac
+    - trigger: state
+      entity_id: climate.main_room_ac
+      attribute: hvac_action
+    - trigger: state
+      entity_id: sensor.main_room_reference_temperature
+    - trigger: state
+      entity_id: input_number.desired_temperature_main_room
+    - trigger: state
+      entity_id: weather.home
+      attribute: temperature
+    - trigger: state
+      entity_id: input_boolean.away_mode
+  conditions:
+    - condition: state
+      entity_id: input_boolean.aux_radiator_release
+      state: 'on'
+    - condition: template
+      value_template: >-
+        {% set mode = states('climate.main_room_ac') %}
+        {% set action = state_attr('climate.main_room_ac', 'hvac_action') %}
+        {% set heating_allowed = mode == 'heat' or (mode == 'auto' and action == 'heating') %}
+        {% set room = states('sensor.main_room_reference_temperature') %}
+        {% set desired = states('input_number.desired_temperature_main_room') %}
+        {% set outside = state_attr('weather.home', 'temperature') %}
+        {{ is_state('input_boolean.away_mode', 'on')
+           or not heating_allowed
+           or not is_number(room)
+           or not is_number(desired)
+           or not is_number(outside)
+           or (outside | float(0)) > 20.0
+           or (outside | float(0)) > (room | float(0))
+           or (room | float(0)) >= ((desired | float(0)) + 0.5) }}
+  action:
+    - action: input_boolean.turn_off
+      target:
+        entity_id: input_boolean.aux_radiator_release
+
+- id: local_aux_radiator_control_when_ac_active
+  alias: 'Aux heat: control radiators only while main AC is not OFF'
+  mode: restart
+  triggers:
+    - trigger: state
+      entity_id: input_boolean.aux_radiator_release
+    - trigger: state
+      entity_id: climate.main_room_ac
+    - trigger: state
+      entity_id: climate.main_room_ac
+      attribute: hvac_action
+    - trigger: state
+      entity_id: input_number.desired_temperature_main_room
+    - trigger: time
+      at: '23:00:00'
+    - trigger: time
+      at: '08:00:00'
+    - trigger: time_pattern
+      minutes: /5
+  conditions:
+    - condition: state
+      entity_id: input_boolean.away_mode
+      state: 'off'
+    - condition: template
+      value_template: "{{ states('climate.main_room_ac') != 'off' }}"
+  action:
+    - variables:
+        mode: "{{ states('climate.main_room_ac') }}"
+        action: "{{ state_attr('climate.main_room_ac', 'hvac_action') }}"
+        heating_allowed: "{{ mode == 'heat' or (mode == 'auto' and action == 'heating') }}"
+        desired: "{{ states('input_number.desired_temperature_main_room') | float(22) }}"
+        aux_target: "{{ ((((desired - 1.0) * 2) | round) / 2) }}"
+        night: "{{ now().hour >= 23 or now().hour < 8 }}"
+    - choose:
+        - conditions:
+            - condition: template
+              value_template: "{{ (heating_allowed | bool) and is_state('input_boolean.aux_radiator_release', 'on') }}"
+          sequence:
+            - action: climate.set_hvac_mode
+              target:
+                entity_id: [climate.aux_radiator_1, climate.aux_radiator_2]
+              data:
+                hvac_mode: heat
+            - action: climate.set_temperature
+              target:
+                entity_id: [climate.aux_radiator_1, climate.aux_radiator_2]
+              data:
+                temperature: "{{ aux_target }}"
+        - conditions:
+            - condition: template
+              value_template: "{{ (heating_allowed | bool) and not is_state('input_boolean.aux_radiator_release', 'on') and (night | bool) }}"
+          sequence:
+            - action: climate.set_hvac_mode
+              target:
+                entity_id: [climate.aux_radiator_1, climate.aux_radiator_2]
+              data:
+                hvac_mode: heat
+            - action: climate.set_temperature
+              target:
+                entity_id: [climate.aux_radiator_1, climate.aux_radiator_2]
+              data:
+                temperature: 18.0
+      default:
+        - action: climate.set_temperature
+          target:
+            entity_id: [climate.aux_radiator_1, climate.aux_radiator_2]
+          data:
+            temperature: 10.0
+        - action: climate.set_hvac_mode
+          target:
+            entity_id: [climate.aux_radiator_1, climate.aux_radiator_2]
+          data:
+            hvac_mode: 'off'
+
+- id: local_aux_winter_reserve_state
+  alias: 'Aux heat: daytime winter-reserve state while AC is OFF'
+  mode: restart
+  triggers:
+    - trigger: state
+      entity_id: sensor.main_room_reference_temperature
+    - trigger: state
+      entity_id: climate.main_room_ac
+    - trigger: state
+      entity_id: input_boolean.away_mode
+    - trigger: time_pattern
+      minutes: /5
+    - trigger: homeassistant
+      event: start
+  action:
+    - variables:
+        room: "{{ states('sensor.main_room_reference_temperature') }}"
+        start_reserve: >-
+          {{ is_state('input_boolean.away_mode', 'off')
+             and is_state('climate.main_room_ac', 'off')
+             and is_number(room)
+             and (room | float(0)) < 16.0 }}
+        stop_reserve: >-
+          {{ is_state('input_boolean.away_mode', 'on')
+             or not is_state('climate.main_room_ac', 'off')
+             or not is_number(room)
+             or (room | float(999)) >= 18.0 }}
+    - choose:
+        - conditions:
+            - condition: template
+              value_template: "{{ start_reserve | bool }}"
+          sequence:
+            - action: input_boolean.turn_on
+              target:
+                entity_id: input_boolean.aux_winter_reserve
+        - conditions:
+            - condition: template
+              value_template: "{{ stop_reserve | bool }}"
+          sequence:
+            - action: input_boolean.turn_off
+              target:
+                entity_id: input_boolean.aux_winter_reserve
+
+- id: local_aux_radiator_control_when_ac_off
+  alias: 'Aux heat: AC-OFF night reserve and daytime winter reserve'
+  mode: restart
+  triggers:
+    - trigger: state
+      entity_id: climate.main_room_ac
+    - trigger: state
+      entity_id: sensor.main_room_reference_temperature
+    - trigger: state
+      entity_id: weather.home
+      attribute: temperature
+    - trigger: state
+      entity_id: input_boolean.aux_winter_reserve
+    - trigger: time
+      at: '23:00:00'
+    - trigger: time
+      at: '08:00:00'
+    - trigger: time_pattern
+      minutes: /5
+    - trigger: homeassistant
+      event: start
+  conditions:
+    - condition: state
+      entity_id: input_boolean.away_mode
+      state: 'off'
+    - condition: state
+      entity_id: climate.main_room_ac
+      state: 'off'
+  action:
+    - variables:
+        room: "{{ states('sensor.main_room_reference_temperature') }}"
+        outside: "{{ state_attr('weather.home', 'temperature') }}"
+        night: "{{ now().hour >= 23 or now().hour < 8 }}"
+        reserve_valid: >-
+          {{ ((night | bool) and is_number(outside) and (outside | float(0)) <= 20.0)
+             or (not (night | bool)
+                 and is_state('input_boolean.aux_winter_reserve', 'on')
+                 and is_number(room)
+                 and (room | float(0)) < 18.0) }}
+    - choose:
+        - conditions:
+            - condition: template
+              value_template: "{{ reserve_valid | bool }}"
+          sequence:
+            - action: climate.set_hvac_mode
+              target:
+                entity_id: [climate.aux_radiator_1, climate.aux_radiator_2]
+              data:
+                hvac_mode: heat
+            - action: climate.set_temperature
+              target:
+                entity_id: [climate.aux_radiator_1, climate.aux_radiator_2]
+              data:
+                temperature: 18.0
+      default:
+        - action: climate.set_temperature
+          target:
+            entity_id: [climate.aux_radiator_1, climate.aux_radiator_2]
+          data:
+            temperature: 10.0
+        - action: climate.set_hvac_mode
+          target:
+            entity_id: [climate.aux_radiator_1, climate.aux_radiator_2]
+          data:
+            hvac_mode: 'off'
