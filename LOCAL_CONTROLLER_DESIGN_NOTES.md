@@ -1,12 +1,16 @@
 # Local-primary controller design notes (2026-09-10)
 
-This document explains the reasoning behind the current **local-primary Mitsubishi controller** and why it now differs from the older MELCloud Home example.
+This document explains the reasoning behind the current **local-primary Mitsubishi controller** and why it differs from the older MELCloud Home example.
 
-The matching public YAML is:
+Matching focused public YAML:
 
-`local_primary_hvac_action_external_temperature_control_public.yaml`
+`local_primary_hvac_action_aux_heating_example.yaml`
 
-The file is intentionally neutralized. It contains only generic Home Assistant entity IDs and no local IP addresses, MAC addresses, accounts, tokens, e-mail addresses, private hostnames or personal names.
+Matching helper example:
+
+`local_primary_helpers_example.yaml`
+
+The public files are intentionally neutralized. They contain generic Home Assistant entity IDs and no local IP addresses, MAC addresses, accounts, tokens, e-mail addresses, private hostnames or personal names.
 
 ## 1. Architecture: local control first, MELCloud Home only as fallback
 
@@ -26,13 +30,13 @@ The local integration used for this design is:
 
 `pymitsubishi/homeassistant-mitsubishi`
 
-The goal is simple: normal control should keep working without depending on the Mitsubishi cloud. MELCloud Home may remain configured as a manual fallback, but a second full automation controller must not run against the same unit at the same time.
+The goal is that normal control no longer depends on the Mitsubishi cloud. MELCloud Home may remain configured as a manual fallback, but a second full automation controller must not run against the same unit at the same time.
 
 ## 2. Native AUTO is kept native
 
 The current controller does **not** simulate AUTO by switching Home Assistant between HEAT and COOL.
 
-The user-selected mode remains unchanged:
+The selected mode remains unchanged:
 
 - `auto` stays `auto`
 - `heat` stays `heat`
@@ -44,17 +48,9 @@ This preserves Mitsubishi's own inverter, compressor, fan and AUTO decision logi
 
 ## 3. Why `hvac_action` matters
 
-A climate entity state such as `auto` only tells us the selected HVAC mode. It does not, by itself, say whether the unit is currently heating, cooling or waiting.
+A climate entity state such as `auto` only tells us the selected HVAC mode. It does not say whether the unit is currently heating, cooling or waiting.
 
-The local integration exposes the current operating action through the standard Home Assistant `hvac_action` attribute. Its implementation maps the Mitsubishi AUTO state to Home Assistant actions such as:
-
-- `heating`
-- `cooling`
-- `idle`
-
-That distinction is used only for **auxiliary heating permission**.
-
-The rule is deliberately strict:
+The local integration exposes the current operating action through Home Assistant `hvac_action`. The auxiliary-heating rule is deliberately strict:
 
 ```text
 HEAT                  -> auxiliary heating may be allowed
@@ -66,7 +62,7 @@ COOL                  -> auxiliary heating blocked
 OFF                   -> auxiliary heating blocked, except the separate winter reserve
 ```
 
-This prevents an auxiliary radiator or electric heater from fighting the air conditioner while AUTO has internally chosen cooling.
+This prevents an auxiliary radiator from fighting the air conditioner while AUTO has internally chosen cooling.
 
 Long-term reliability of `hvac_action` should still be observed on each real installation over multiple AUTO heating/cooling/idle cycles.
 
@@ -76,17 +72,17 @@ An earlier design copied target-temperature changes reported by the climate devi
 
 That approach was removed from the local-primary controller.
 
-Reason: asynchronous device echoes and automatic compensation writes can race each other. Even with a helper storing the last automatic target, an intermediate device target can be misclassified as a user request and create a rapid target bounce or feedback loop.
+Reason: asynchronous device echoes and automatic compensation writes can race each other. An intermediate device target can then be misclassified as a user request and create rapid target bouncing or a feedback loop.
 
-The safer rule is therefore:
+The safer rule is:
 
 > The desired-temperature helper is authoritative.
 
 The controller may change the Mitsubishi **device target**, but a device target change never changes the desired-temperature helper.
 
-If a user wants to change the real desired room temperature, the UI, dashboard, voice command or service should change the desired-temperature helper directly.
+If a user wants to change the real desired room temperature, a dashboard, script, voice command or service should change the desired-temperature helper directly.
 
-The `last_automatic_target_*` helpers remain useful, but only to detect the controller's own writes, avoid unnecessary repeats and support the periodic safety retry. They are no longer used as permission for device-target-to-helper back-synchronization.
+The `last_automatic_target` helper remains only to mark the controller's own writes, avoid unnecessary repeats and support the periodic target-delivery retry. It no longer authorizes device-target-to-helper back-synchronization.
 
 ## 5. Temperature-compensation algorithm
 
@@ -98,7 +94,7 @@ error = external_room_temperature - desired_room_temperature
 
 ### AUTO
 
-AUTO uses fixed 0.5 °C correction steps, matching the 0.5 °C target resolution of the tested local Mitsubishi climate entity:
+AUTO uses fixed 0.5 °C correction steps:
 
 | Absolute room error | Correction magnitude |
 | --- | ---: |
@@ -131,77 +127,65 @@ All numeric template conversions use explicit `float(...)` defaults to avoid tem
 
 ## 6. Auxiliary radiator thermostats
 
-The public example includes two optional auxiliary radiator thermostat entities.
-
-They are intentionally subordinate to the Mitsubishi system.
-
-### Start permission
+The focused public example includes two optional auxiliary radiator thermostat entities. They are subordinate to the Mitsubishi system.
 
 A release is possible only when:
 
 - away mode is off;
 - Mitsubishi is in `heat`, or in `auto` with `hvac_action == heating`;
-- the room reference is at least `0.5 °C` below the desired temperature;
+- the room reference is at least `0.5 °C` below desired;
 - outdoor temperature is `<= 20 °C`;
-- outdoor temperature is not warmer than the indoor room reference;
+- outdoor temperature is not warmer than the room reference;
 - the condition remains true for 25 minutes.
 
-The 25-minute delay prevents short Mitsubishi recovery periods from immediately calling for radiator assistance.
+The 25-minute delay prevents short recovery periods from immediately calling for radiator assistance.
 
-### Auxiliary target offset
-
-When released, the auxiliary thermostat target is:
+When released, the example auxiliary thermostat target is:
 
 ```text
 desired room temperature - 1.0 °C
 ```
 
-Why 1.0 °C? The auxiliary emitters should help the primary system, not become the main thermostat. A larger 1.5 °C separation can be too passive after the 25-minute delay and 0.5 °C demand threshold are already applied. A 1.0 °C separation keeps Mitsubishi clearly primary while allowing useful assistance.
-
-This is still an example tuning value; different buildings may prefer 0.5, 1.0 or 1.5 °C.
+A larger 1.5 °C separation can be too passive after the 25-minute delay and 0.5 °C demand threshold are already applied. A 1.0 °C separation keeps Mitsubishi clearly primary while allowing useful assistance. This is still a tuning value, not a universal rule.
 
 ## 7. Why the 25-minute `for:` is intentionally not restart-persistent
 
 Home Assistant resets a trigger `for:` duration when automations are reloaded or Home Assistant restarts.
 
-For this particular use case that behavior is accepted deliberately.
-
-After a restart, the auxiliary radiator release must prove the heating-demand condition for 25 minutes again. The only consequence is delayed auxiliary heat. It cannot cause auxiliary heating to start too early.
+For this use case that behavior is accepted deliberately. After a restart, the auxiliary radiator release must prove the heating-demand condition for 25 minutes again. The only consequence is delayed auxiliary heat; it cannot cause auxiliary heating to start too early.
 
 A restart-persistent implementation would require another timestamp/helper and more state handling. The current design chooses the simpler fail-safe behavior.
 
-## 8. Strict separation between AC-on and AC-off radiator logic
+## 8. Strict separation between AC-active and AC-off radiator logic
 
-Two automations control different, mutually exclusive scopes:
+Two automations control mutually exclusive scopes:
 
 ```text
 main AC != off  -> normal auxiliary-radiator logic
 main AC == off  -> winter-reserve logic
 ```
 
-This separation is intentional. Earlier versions allowed overlapping automations to evaluate the same cooling state and both send `off`/frost-protection commands to the radiator thermostats.
+This separation is intentional. Earlier versions could let overlapping automations evaluate the same state and both send off/frost-protection commands to the radiator thermostats.
 
-The current design removes that overlap at the architecture level instead of relying on action ordering.
+The current design removes that overlap at the architecture level rather than relying on action ordering.
 
 ## 9. Night reserve when the main AC is OFF
 
 When the main Mitsubishi is OFF, the radiator thermostats may provide a low-level winter reserve.
 
-Night window:
+Example night window:
 
 ```text
 23:00 -> 08:00
 ```
 
-If outdoor temperature is valid and `<= 20 °C`, the example sets both auxiliary radiator thermostats to:
+If outdoor temperature is valid and `<= 20 °C`, the example sets the auxiliary radiator thermostats to:
 
 ```text
 18.0 °C
 ```
 
-This avoids a very cold room overnight without requiring the Mitsubishi to stay on.
-
-The Home Assistant automation is the source of truth for this target. Vendor comfort/eco schedules should not be required for the logic.
+Home Assistant is the source of truth for this target. Vendor comfort/eco schedules are not required for the logic.
 
 ## 10. Daytime winter reserve when the main AC is OFF
 
@@ -221,48 +205,31 @@ Once started, it remains active until the room reaches:
 
 A dedicated Boolean helper stores that reserve state. This gives a wide 16 -> 18 °C hysteresis and avoids rapid on/off cycling around the start threshold.
 
-The separate electric auxiliary heater is **not** included in this AC-off reserve.
+## 11. Separate switch-controlled auxiliary heater in the fuller production design
 
-## 11. Separate electric auxiliary heater
+The fuller production design can additionally contain a switch-controlled heater with its own room-reference sensor. The focused public YAML intentionally does **not** include that heater block.
 
-The example also contains an optional switch-controlled heater with its own room-reference sensor.
-
-Automatic operation requires:
+A suitable production rule is:
 
 - away mode off;
 - `heat`, or `auto + heating`;
-- a valid heater-reference temperature;
-- outdoor temperature `<= 15 °C`;
-- outdoor temperature not warmer than the heater-reference temperature.
+- valid heater-reference temperature;
+- optional outdoor-temperature limits;
+- automatic stop when permission disappears.
 
-It starts immediately below the desired temperature and stops at desired `+0.5 °C`, or when any permission condition disappears.
-
-### Manual runtime limit
-
-A manual/voice-started run is allowed only while real heating permission exists and is limited to four hours.
-
-The end time is stored as an absolute UNIX timestamp:
+A manual/voice-started run can be limited to four hours with an absolute deadline stored in `input_datetime`, for example:
 
 ```yaml
 timestamp: "{{ as_timestamp(now()) + 14400 }}"
 ```
 
-This is intentional. It survives midnight and Home Assistant restarts because the absolute deadline is stored in an `input_datetime` helper.
+Using an absolute UNIX timestamp is intentional because the stored deadline survives midnight and Home Assistant restarts. A fixed time such as 23:00 can remain a one-time hard shutdown event.
 
-A 23:00 event remains a hard shutdown event. It is a one-time safety shutdown, not a permanent night lock.
+## 12. Away mode
 
-## 12. Away-mode shutdown
+The focused public YAML uses away mode as a hard permission condition for auxiliary heating.
 
-Away mode shuts down:
-
-- both Mitsubishi units;
-- both auxiliary radiator thermostats;
-- the separate auxiliary heater;
-- auxiliary release/reserve markers.
-
-The shutdown is retried periodically and uses `continue_on_error` where appropriate so that one unavailable device does not prevent the remaining shutdown actions.
-
-The example also allows away mode to end automatically if a Mitsubishi unit is deliberately switched from OFF into an active mode. A transition from `unknown`/`unavailable` is not treated as a deliberate return.
+A fuller production configuration may additionally perform explicit shutdown/retry actions for Mitsubishi units, radiator thermostats, auxiliary heaters and release/reserve markers. `continue_on_error` is useful so one unavailable device does not prevent the remaining safety actions.
 
 ## 13. Horizontal vane spelling
 
@@ -272,49 +239,43 @@ The tested local integration uses:
 center
 ```
 
-for horizontal center.
-
-MELCloud Home may use:
+for horizontal center. MELCloud Home may use:
 
 ```text
 centre
 ```
 
-This small spelling difference is integration-specific and is a common migration trap.
+This spelling difference is integration-specific and is a common migration trap.
 
 ## 14. Safety retry
 
-The controller checks periodically whether the climate entity actually reports the calculated target. If it differs, the target is sent again.
+The main target controller periodically checks whether the climate entity actually reports the calculated target. If it differs, the target is sent again.
 
-This is a target-delivery safety retry. It is not the old forced MELCloud `update_entity` workaround, which is unnecessary for the local-primary path.
+This is a target-delivery safety retry, not the older forced MELCloud `update_entity` workaround.
 
 ## 15. Required neutral helper entities
 
-See `local_primary_helpers_example.yaml` for a matching example.
+See `local_primary_helpers_example.yaml`.
 
-The local controller expects:
+The focused public controller expects:
 
 ```text
-input_number.wunschtemperatur_hauptraum
-input_number.wunschtemperatur_nebenraum
-input_number.letzte_automatische_zieltemperatur_hauptraum
-input_number.letzte_automatische_zieltemperatur_nebenraum
-input_boolean.zusatzheizung_freigabe_hauptraum
-input_boolean.zusatzheizung_winterreserve_hauptraum
-input_boolean.zusatzheizer_automatisch
-input_boolean.abwesenheit
-input_datetime.zusatzheizer_manuell_bis
+input_number.desired_temperature_main_room
+input_number.last_automatic_target_main_room
+input_boolean.aux_radiator_release
+input_boolean.aux_winter_reserve
+input_boolean.away_mode
 ```
 
-The temperature sensors, climate entities, heater switch and weather entity must be replaced with entities from the target installation.
+The two auxiliary radiator climate entities, main-room climate entity, external room-temperature sensor and weather entity are neutral placeholders that must also be replaced.
 
 ## 16. Validation status
 
-For the public 2026-09-10 local-primary example:
+For the public 2026-09-10 focused local-primary example:
 
 - YAML syntax validated;
-- 12 automations;
-- 12 unique automation IDs;
+- 6 automations;
+- 6 unique automation IDs;
 - no bare `| float` conversions without defaults;
 - generic entity IDs only;
 - no private IP addresses, MAC addresses, e-mail addresses, account names, API tokens or private hostnames included.
