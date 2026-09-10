@@ -78,11 +78,17 @@ For the tested local integration, horizontal center is `center`, not MELCloud Ho
 
 ## 5. Verify `hvac_action`
 
-This is now important for auxiliary-heating safety.
+This is important for auxiliary-heating safety.
 
-In Developer Tools, inspect the climate entity while the selected HVAC mode is AUTO.
+A simple way to observe the current value is a temporary Home Assistant Markdown dashboard card:
 
-Observe the `hvac_action` attribute through several real cycles. The controller expects standard Home Assistant values such as:
+```jinja2
+HVAC Action: **{{ state_attr('climate.main_room_ac', 'hvac_action') }}**
+```
+
+Watch it together with the external room reference, desired temperature, Mitsubishi internal temperature and compensated device target.
+
+The controller expects values such as:
 
 ```text
 heating
@@ -90,17 +96,32 @@ cooling
 idle
 ```
 
-Auxiliary heating is permitted only for:
+### Important: `idle` is not a heating verdict
+
+The local integration returns `idle` when the compressor is currently not operating. Therefore `AUTO + idle` does **not** prove that the external room is already at its desired temperature.
+
+The current normal auxiliary-heating permission is:
 
 ```text
-heat
+HEAT
 or
-auto + hvac_action == heating
+AUTO + hvac_action in [heating, idle]
 ```
 
-AUTO cooling, AUTO idle, unclear AUTO action, COOL and OFF do not give normal auxiliary-heating permission.
+But `idle` is only a neutral permission state. The external room-temperature, outdoor-temperature, timing and hysteresis checks must still be satisfied before any auxiliary heater starts.
 
-Do not assume long-term reliability from one state transition; observe several cycles on the actual hardware/firmware.
+These states remain hard-blocked:
+
+```text
+AUTO + cooling
+AUTO + unclear/None
+COOL
+DRY
+FAN_ONLY
+OFF (except separate winter reserve)
+```
+
+Observe several real cycles on the actual hardware/firmware.
 
 ## 6. Keep native AUTO native
 
@@ -113,6 +134,10 @@ COOL stays COOL
 ```
 
 Home Assistant only compensates the target temperature from the external room-temperature error.
+
+The current AUTO correction curve is deliberately unchanged after the latest field test. In one observed cycle, the unit stayed `idle` for a period while the external room was warmer than desired, then changed by itself to `cooling` while remaining in native AUTO. That is evidence that an idle period can be part of Mitsubishi's own internal timing rather than proof of a stuck AUTO controller.
+
+Do not add an AUTO->COOL/HEAT override or steepen the target curve solely because of one idle interval. Observe repeated behavior first.
 
 ## 7. Desired-temperature helper is authoritative
 
@@ -151,7 +176,7 @@ Start from:
 
 `local_primary_hvac_action_aux_heating_example.yaml`
 
-Replace all placeholder climate, sensor, switch, helper and weather entities with entities from your installation.
+Replace all placeholder climate, sensor, helper and weather entities with entities from your installation.
 
 Do not copy the example thresholds blindly. Review every number and schedule.
 
@@ -161,17 +186,21 @@ The example uses two optional radiator thermostat entities.
 
 Normal auxiliary release requires:
 
-- real heating permission (`heat` or `auto + heating`);
+- `HEAT`, or `AUTO + heating/idle`;
 - room at least 0.5 °C below desired;
 - outdoor <= 20 °C;
 - outdoor not warmer than room;
-- 25 minutes of stable demand.
+- 25 minutes of stable external demand.
 
 After release, the example target is:
 
 ```text
 desired - 1.0 °C
 ```
+
+A transition from AUTO `heating` to `idle` does not by itself reset the pending 25-minute release as long as the external demand template remains true.
+
+A transition to AUTO `cooling`, unclear AUTO state, invalid sensors or loss of heating demand makes the template false and cancels the pending release immediately.
 
 The 25-minute `for:` duration intentionally restarts after a Home Assistant restart or automation reload. For this design that is fail-safe because it can only delay auxiliary heat.
 
@@ -185,15 +214,24 @@ Example behavior while the main AC is OFF:
 
 - 23:00–08:00: 18 °C night reserve when outdoor temperature is valid and <=20 °C;
 - daytime: normally off;
-- below 16 °C: daytime winter reserve starts and remains active until 18 °C.
+- below 16 °C: daytime winter reserve starts only when outdoor temperature is valid and <=20 °C;
+- reserve remains active until 18 °C, or ends earlier if the outside value becomes invalid/too warm, the main AC is switched on or away mode is enabled.
 
 The reserve state is stored in a Boolean helper so the 16 -> 18 °C hysteresis survives ordinary sensor updates and Home Assistant restarts.
 
 ## 12. Separate switch-controlled auxiliary heater
 
-The production design can additionally use a switch-controlled auxiliary heater with its own reference sensor.
+The fuller production design can additionally use a switch-controlled auxiliary heater with its own reference sensor.
 
-Automatic operation is permitted only with real heating permission. The design can also check outdoor temperature and a dedicated heater-reference sensor.
+The same AUTO interpretation applies:
+
+```text
+HEAT -> may run after its own demand conditions
+AUTO + heating -> may run after its own demand conditions
+AUTO + idle -> may run after its own external demand conditions
+AUTO + cooling/unclear -> blocked
+COOL/OFF -> blocked
+```
 
 Manual starts can be limited to four hours. The absolute deadline can be stored with:
 
@@ -263,11 +301,12 @@ The local automation is unavailable. MELCloud Home and the original IR remote ma
 2. Confirm all placeholder entity IDs are replaced.
 3. Confirm the desired helper changes the real desired temperature.
 4. Confirm no device-target-to-helper back-sync automation remains.
-5. Observe AUTO `heating`, `cooling` and `idle` states.
-6. Confirm auxiliary radiators are blocked during AUTO cooling/idle.
-7. Confirm AC-OFF winter reserve works only in its own scope.
-8. Review logs for unavailable entities or template warnings.
-9. Keep a rollback backup.
+5. Observe AUTO `heating`, `cooling` and `idle` over multiple cycles.
+6. Confirm auxiliary radiators remain off during AUTO `cooling` and unclear AUTO states.
+7. Confirm AUTO `idle` alone does not start auxiliary heat; external demand must still be present.
+8. Confirm AC-OFF winter reserve respects the outdoor <=20 °C lockout.
+9. Review logs for unavailable entities or template warnings.
+10. Keep a rollback backup.
 
 ## Security
 
