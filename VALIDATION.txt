@@ -1,25 +1,39 @@
-# Validation report
+# Validation / review notes
 
-Current local-primary public example (2026-09-10):
+Current local-primary public example (2026-09-10, AUTO-idle update):
 
-- `local_primary_hvac_action_aux_heating_example.yaml`: YAML syntax OK
-- Automations in that focused public example: 6
-- Unique automation IDs: 6
+- `local_primary_hvac_action_aux_heating_example.yaml`: focused neutral public controller
+- Automations in the focused public example: 6
+- Automation IDs: 6 distinct IDs
 - Bare `| float` filters without an explicit default: 0
-- `local_primary_helpers_example.yaml`: YAML syntax OK
-- AC-active auxiliary-radiator logic and AC-OFF winter-reserve logic are mutually exclusive by climate state
-- Device-target-to-desired-helper back-synchronization is intentionally absent from the local-primary example
-- 25-minute auxiliary release uses a Home Assistant `for:` trigger and intentionally restarts after HA restart/reload (fail-safe delay)
-- The full production design additionally documents a separate switch-controlled heater with an absolute UNIX-timestamp deadline stored in `input_datetime`
+- `local_primary_helpers_example.yaml`: matching neutral helper example
+- Device-target-to-desired-helper back-synchronization is intentionally absent
+- Native AUTO remains native AUTO; the established AUTO target-correction curve is unchanged
+- `AUTO + idle` is no longer a blanket auxiliary-heating block
+- `idle` is treated as neutral permission only; external demand conditions must still be satisfied
+- `AUTO + cooling` and unclear/None AUTO action remain hard blocks for auxiliary heating
+- The 25-minute auxiliary release can continue through `heating -> idle` when the external-demand template remains true
+- The 25-minute `for:` still intentionally restarts after a Home Assistant restart/reload (fail-safe delay)
+- AC-active auxiliary-radiator logic and AC-OFF winter-reserve logic remain mutually exclusive by main climate state
+- Daytime and nighttime AC-OFF winter reserve now require a valid outdoor temperature <=20 °C
+- The fuller production design additionally documents a separate switch-controlled heater with the same AUTO-idle interpretation and an absolute UNIX-timestamp manual deadline stored in `input_datetime`
 
-Other example files previously validated:
+Latest field observation documented in the repository:
 
-- `helpers_example.yaml`: YAML syntax OK
-- `living_room_multi_sensor.yaml`: YAML syntax OK
-- `bedroom_single_sensor.yaml`: YAML syntax OK
-- `melcloud_refresh_5min.yaml`: YAML syntax OK
-- `optional_horizontal_swing.yaml`: YAML syntax OK
+- During one AUTO cycle, the unit remained `idle` while the external room temperature was above desired.
+- Without a forced HVAC-mode change, the same unit later transitioned to `cooling` while remaining in native AUTO.
+- Because of that, no stronger AUTO offset curve and no forced AUTO->COOL/HEAT fallback has been added yet.
+- Repeated real-world cycles should be observed before changing the AUTO curve.
 
-Security/privacy scan of the new local public YAML found no personal room/entity names from the source installation, local IP addresses, e-mail addresses, MAC addresses, passwords, API keys, bearer tokens, webhook IDs or private hostnames.
+Security/privacy review of the local public example:
 
-All entity IDs in the new local public controller are neutral placeholders and must be adapted before use.
+- generic entity IDs only
+- no personal room/entity names from the source installation
+- no local IP addresses
+- no e-mail addresses
+- no MAC addresses
+- no passwords
+- no API keys / bearer tokens / webhook IDs
+- no private hostnames
+
+The public YAML is an example and should still be checked with the target Home Assistant installation after replacing placeholder entities, because available modes, services and device behavior can vary by integration and firmware.
