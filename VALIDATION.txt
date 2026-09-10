@@ -1,9 +1,25 @@
 # Validation report
 
+Current local-primary public example (2026-09-10):
+
+- `local_primary_hvac_action_aux_heating_example.yaml`: YAML syntax OK
+- Automations in that focused public example: 6
+- Unique automation IDs: 6
+- Bare `| float` filters without an explicit default: 0
+- `local_primary_helpers_example.yaml`: YAML syntax OK
+- AC-active auxiliary-radiator logic and AC-OFF winter-reserve logic are mutually exclusive by climate state
+- Device-target-to-desired-helper back-synchronization is intentionally absent from the local-primary example
+- 25-minute auxiliary release uses a Home Assistant `for:` trigger and intentionally restarts after HA restart/reload (fail-safe delay)
+- The full production design additionally documents a separate switch-controlled heater with an absolute UNIX-timestamp deadline stored in `input_datetime`
+
+Other example files previously validated:
+
 - `helpers_example.yaml`: YAML syntax OK
 - `living_room_multi_sensor.yaml`: YAML syntax OK
 - `bedroom_single_sensor.yaml`: YAML syntax OK
 - `melcloud_refresh_5min.yaml`: YAML syntax OK
 - `optional_horizontal_swing.yaml`: YAML syntax OK
 
-Security scan of the public YAML examples found no IP addresses, e-mail addresses, MAC addresses, URLs, passwords, API-key labels, bearer tokens or webhook labels.
+Security/privacy scan of the new local public YAML found no personal room/entity names from the source installation, local IP addresses, e-mail addresses, MAC addresses, passwords, API keys, bearer tokens, webhook IDs or private hostnames.
+
+All entity IDs in the new local public controller are neutral placeholders and must be adapted before use.
