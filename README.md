@@ -109,24 +109,42 @@ The core room-temperature compensation remains the same: native Mitsubishi AUTO 
 
 The local-primary design adds several important safeguards and behaviors:
 
-- `hvac_action` is used to distinguish `AUTO + heating` from `AUTO + cooling` and `AUTO + idle`.
-- Auxiliary heating is allowed in HEAT, and in AUTO only while `hvac_action == heating`.
-- Auxiliary heating is blocked during AUTO cooling/idle/unknown and during COOL.
+- `hvac_action` is used to distinguish active AUTO heating/cooling from compressor-idle periods.
+- Auxiliary heating is allowed in HEAT.
+- In AUTO, `heating` allows auxiliary heating after the normal external-demand checks.
+- In AUTO, `idle` is now treated as **neutral**, not as proof that heating demand has ended. External temperature conditions still decide whether auxiliary heating may actually run.
+- `AUTO + cooling` remains a hard block for every auxiliary heater.
+- `AUTO + unclear/None` remains fail-safe blocked.
 - The desired-temperature helper is authoritative; device target changes are **not** written back into it.
 - The older target back-synchronization automations were removed to eliminate a race/feedback-loop class.
 - The auxiliary radiator target is `desired - 1.0 °C` after a 25-minute demand delay.
 - When the main AC is OFF, a separate winter reserve can hold 18 °C at night and can start a 16 -> 18 °C daytime reserve.
+- The daytime reserve also requires a valid outdoor temperature `<= 20 °C`.
 - The AC-ON and AC-OFF auxiliary-radiator automations are mutually exclusive to avoid duplicate commands.
 - Numeric template conversions use explicit defaults.
-- The fuller production design can additionally use a separate switch-controlled heater with the same real-heating permission and a restart-safe absolute 4-hour manual deadline.
+- The fuller production design can additionally use a separate switch-controlled heater with the same `AUTO + idle` interpretation and a restart-safe absolute 4-hour manual deadline.
 
 See `LOCAL_CONTROLLER_DESIGN_NOTES.md` for the full reasoning behind every decision.
 
-### Important status note about `hvac_action`
+### Important `hvac_action` detail
 
-The local integration implementation exposes the current HVAC action and maps Mitsubishi AUTO heating/cooling states into Home Assistant `heating` / `cooling` actions, with `idle` when the compressor is not operating.
+In the local integration implementation, `idle` is returned when the compressor is not operating. It therefore does **not** mean that the external room is necessarily at its desired temperature, and it does not reveal whether the preceding active AUTO phase was heating or cooling.
 
-That makes it suitable for auxiliary-heating gating. However, every installation should still observe `hvac_action` over several real AUTO heating/cooling/idle cycles before treating the behavior as fully proven for its exact hardware/firmware combination.
+That is why solution 3 treats `AUTO + idle` as a neutral state for auxiliary heating: it removes the blanket block, while the external room-temperature, outdoor-temperature, timing and hysteresis conditions still decide whether auxiliary heat starts.
+
+`AUTO + cooling` is different and unambiguous: the Mitsubishi is actively cooling, so auxiliary heating is immediately blocked.
+
+### Latest field observation
+
+A test on 2026-09-10 showed an AUTO period in which the external room temperature was above the desired temperature while `hvac_action` stayed `idle` for a while. The same unit later changed to `cooling` **without leaving native AUTO and without Home Assistant forcing COOL**.
+
+Because of that observation, the current AUTO target-correction curve has **not** been steepened and no AUTO->COOL/HEAT override has been added. More real-world cycles should be observed before changing a curve that otherwise works correctly.
+
+A simple way to monitor the state is a temporary Home Assistant Markdown card containing:
+
+```jinja2
+HVAC Action: **{{ state_attr('climate.main_room_ac', 'hvac_action') }}**
+```
 
 ### Horizontal vane difference
 
@@ -179,11 +197,13 @@ The example defaults are intentionally conservative and must be reviewed for eac
 
 - radiator release after 25 minutes of stable demand;
 - demand threshold: room at least 0.5 °C below desired;
+- normal auxiliary permission: HEAT or AUTO with `heating`/`idle` plus all external demand checks;
+- hard block: AUTO `cooling`, unclear AUTO action, COOL, DRY, FAN, OFF;
 - outdoor limit for radiator assistance: 20 °C;
 - radiator target after release: desired minus 1.0 °C;
 - AC OFF night reserve: 18 °C from 23:00 to 08:00 when outdoor temperature is valid and <= 20 °C;
-- AC OFF daytime reserve: start below 16 °C, hold until 18 °C;
-- switch-controlled auxiliary heater outdoor limit: 15 °C;
+- AC OFF daytime reserve: start below 16 °C, hold until 18 °C, only with valid outdoor temperature <= 20 °C;
+- switch-controlled auxiliary heater outdoor limit in the fuller design: 15 °C;
 - switch-controlled heater automatic stop: desired + 0.5 °C;
 - manual heater runtime limit: 4 hours;
 - 23:00 heater shutdown event.
@@ -198,7 +218,7 @@ The 25-minute trigger duration intentionally starts again after Home Assistant r
 2. Install and test the local Mitsubishi integration.
 3. Keep MELCloud Home only as fallback/manual control if desired.
 4. Verify local power, target temperature, AUTO, HEAT, COOL and optional vane control.
-5. Verify the `hvac_action` attribute in Developer Tools while AUTO is heating, cooling and idle.
+5. Display `hvac_action` temporarily on a dashboard and observe AUTO heating, cooling and idle periods.
 6. Create the helpers from `local_primary_helpers_example.yaml` or in the Home Assistant UI.
 7. Replace every placeholder entity ID in `local_primary_hvac_action_aux_heating_example.yaml`.
 8. Review every temperature threshold, schedule and auxiliary-heating rule.
@@ -250,6 +270,7 @@ Useful feedback includes:
 - external sensor type
 - observed `hvac_action` during AUTO heating/cooling/idle
 - target-temperature behavior
+- duration of AUTO idle periods before heating/cooling resumes
 - auxiliary-heating behavior
 - horizontal-vane behavior
 - behavior during Internet or Home Assistant outages
