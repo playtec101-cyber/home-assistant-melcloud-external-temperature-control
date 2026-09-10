@@ -107,7 +107,7 @@ Step-by-step migration guide:
 
 The core room-temperature compensation remains the same: native Mitsubishi AUTO stays native AUTO and Home Assistant adjusts only the target temperature.
 
-The local controller now adds several important safeguards and behaviors:
+The local-primary design adds several important safeguards and behaviors:
 
 - `hvac_action` is used to distinguish `AUTO + heating` from `AUTO + cooling` and `AUTO + idle`.
 - Auxiliary heating is allowed in HEAT, and in AUTO only while `hvac_action == heating`.
@@ -118,7 +118,7 @@ The local controller now adds several important safeguards and behaviors:
 - When the main AC is OFF, a separate winter reserve can hold 18 °C at night and can start a 16 -> 18 °C daytime reserve.
 - The AC-ON and AC-OFF auxiliary-radiator automations are mutually exclusive to avoid duplicate commands.
 - Numeric template conversions use explicit defaults.
-- A separate switch-controlled heater can use the same real-heating permission and a restart-safe absolute 4-hour manual deadline.
+- The fuller production design can additionally use a separate switch-controlled heater with the same real-heating permission and a restart-safe absolute 4-hour manual deadline.
 
 See `LOCAL_CONTROLLER_DESIGN_NOTES.md` for the full reasoning behind every decision.
 
@@ -173,7 +173,7 @@ The `last_automatic_target_*` helpers remain only for detecting the controller's
 
 # Optional auxiliary-heating behavior in solution 3
 
-The local public controller includes generalized optional logic for two radiator thermostat entities and one switch-controlled heater.
+The focused public controller includes generalized optional logic for two radiator thermostat entities. The fuller production design additionally documents a separate switch-controlled heater in `LOCAL_CONTROLLER_DESIGN_NOTES.md`.
 
 The example defaults are intentionally conservative and must be reviewed for each building:
 
@@ -212,7 +212,7 @@ The 25-minute trigger duration intentionally starts again after Home Assistant r
 
 | File | Purpose |
 | --- | --- |
-| `local_primary_hvac_action_aux_heating_example.yaml` | Current neutral local-primary controller with native AUTO, `hvac_action` gating, authoritative desired temperature, auxiliary heating and winter reserve |
+| `local_primary_hvac_action_aux_heating_example.yaml` | Focused neutral local-primary example with native AUTO, `hvac_action` gating, authoritative desired temperature, auxiliary radiator heating and winter reserve |
 | `local_primary_helpers_example.yaml` | Matching helpers for the local-primary controller |
 | `LOCAL_CONTROLLER_DESIGN_NOTES.md` | Detailed explanation of the architecture and why each change was made |
 | `LOCAL_CONTROL_WITH_MELCLOUD_FALLBACK.md` | Local-primary architecture, migration and test guide |
