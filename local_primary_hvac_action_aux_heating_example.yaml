@@ -1,6 +1,15 @@
 # Neutral public example for the current local-primary design.
 # Replace all entity IDs before use. No private installation data is included.
 # Full rationale: LOCAL_CONTROLLER_DESIGN_NOTES.md
+#
+# 2026-09-10 update:
+# - AUTO stays AUTO; the target-correction curve is unchanged.
+# - AUTO + idle is no longer treated as a heating-block state for auxiliary heat.
+#   `idle` only means the compressor is currently not operating. External demand
+#   conditions still decide whether auxiliary heat actually starts.
+# - AUTO + cooling remains a hard block. AUTO + unclear/None remains fail-safe blocked.
+# - The daytime AC-OFF winter reserve now also requires a valid outdoor temperature
+#   <= 20 °C, matching the intended summer lockout.
 
 - id: local_main_room_external_temperature_control
   alias: 'Local AC: external-room target control'
@@ -95,7 +104,7 @@
 # input_number.desired_temperature_main_room is the authoritative user intent.
 
 - id: local_aux_radiator_release_start
-  alias: 'Aux heat: release after stable real heating demand'
+  alias: 'Aux heat: release after stable external heating demand'
   mode: single
   triggers:
     - trigger: template
@@ -103,11 +112,11 @@
       value_template: >-
         {% set mode = states('climate.main_room_ac') %}
         {% set action = state_attr('climate.main_room_ac', 'hvac_action') %}
-        {% set heating_allowed = mode == 'heat' or (mode == 'auto' and action == 'heating') %}
+        {% set aux_allowed = mode == 'heat' or (mode == 'auto' and action in ['heating', 'idle']) %}
         {% set room = states('sensor.main_room_reference_temperature') %}
         {% set desired = states('input_number.desired_temperature_main_room') %}
         {% set outside = state_attr('weather.home', 'temperature') %}
-        {{ heating_allowed
+        {{ aux_allowed
            and is_number(room)
            and is_number(desired)
            and is_number(outside)
@@ -129,7 +138,7 @@
         entity_id: input_boolean.aux_radiator_release
 
 - id: local_aux_radiator_release_stop
-  alias: 'Aux heat: revoke release immediately when heating is no longer valid'
+  alias: 'Aux heat: revoke release when permission or demand is no longer valid'
   mode: restart
   triggers:
     - trigger: state
@@ -154,12 +163,12 @@
       value_template: >-
         {% set mode = states('climate.main_room_ac') %}
         {% set action = state_attr('climate.main_room_ac', 'hvac_action') %}
-        {% set heating_allowed = mode == 'heat' or (mode == 'auto' and action == 'heating') %}
+        {% set aux_allowed = mode == 'heat' or (mode == 'auto' and action in ['heating', 'idle']) %}
         {% set room = states('sensor.main_room_reference_temperature') %}
         {% set desired = states('input_number.desired_temperature_main_room') %}
         {% set outside = state_attr('weather.home', 'temperature') %}
         {{ is_state('input_boolean.away_mode', 'on')
-           or not heating_allowed
+           or not aux_allowed
            or not is_number(room)
            or not is_number(desired)
            or not is_number(outside)
@@ -200,14 +209,14 @@
     - variables:
         mode: "{{ states('climate.main_room_ac') }}"
         action: "{{ state_attr('climate.main_room_ac', 'hvac_action') }}"
-        heating_allowed: "{{ mode == 'heat' or (mode == 'auto' and action == 'heating') }}"
+        aux_allowed: "{{ mode == 'heat' or (mode == 'auto' and action in ['heating', 'idle']) }}"
         desired: "{{ states('input_number.desired_temperature_main_room') | float(22) }}"
         aux_target: "{{ ((((desired - 1.0) * 2) | round) / 2) }}"
         night: "{{ now().hour >= 23 or now().hour < 8 }}"
     - choose:
         - conditions:
             - condition: template
-              value_template: "{{ (heating_allowed | bool) and is_state('input_boolean.aux_radiator_release', 'on') }}"
+              value_template: "{{ (aux_allowed | bool) and is_state('input_boolean.aux_radiator_release', 'on') }}"
           sequence:
             - action: climate.set_hvac_mode
               target:
@@ -221,7 +230,7 @@
                 temperature: "{{ aux_target }}"
         - conditions:
             - condition: template
-              value_template: "{{ (heating_allowed | bool) and not is_state('input_boolean.aux_radiator_release', 'on') and (night | bool) }}"
+              value_template: "{{ (aux_allowed | bool) and not is_state('input_boolean.aux_radiator_release', 'on') and (night | bool) }}"
           sequence:
             - action: climate.set_hvac_mode
               target:
@@ -254,6 +263,9 @@
     - trigger: state
       entity_id: climate.main_room_ac
     - trigger: state
+      entity_id: weather.home
+      attribute: temperature
+    - trigger: state
       entity_id: input_boolean.away_mode
     - trigger: time_pattern
       minutes: /5
@@ -262,20 +274,28 @@
   action:
     - variables:
         room: "{{ states('sensor.main_room_reference_temperature') }}"
+        outside: "{{ state_attr('weather.home', 'temperature') }}"
         start_reserve: >-
           {{ is_state('input_boolean.away_mode', 'off')
              and is_state('climate.main_room_ac', 'off')
              and is_number(room)
+             and is_number(outside)
+             and (outside | float(0)) <= 20.0
              and (room | float(0)) < 16.0 }}
         stop_reserve: >-
           {{ is_state('input_boolean.away_mode', 'on')
              or not is_state('climate.main_room_ac', 'off')
              or not is_number(room)
+             or not is_number(outside)
+             or (outside | float(0)) > 20.0
              or (room | float(999)) >= 18.0 }}
     - choose:
         - conditions:
             - condition: template
               value_template: "{{ start_reserve | bool }}"
+            - condition: state
+              entity_id: input_boolean.aux_winter_reserve
+              state: 'off'
           sequence:
             - action: input_boolean.turn_on
               target:
@@ -283,6 +303,9 @@
         - conditions:
             - condition: template
               value_template: "{{ stop_reserve | bool }}"
+            - condition: state
+              entity_id: input_boolean.aux_winter_reserve
+              state: 'on'
           sequence:
             - action: input_boolean.turn_off
               target:
@@ -322,11 +345,13 @@
         outside: "{{ state_attr('weather.home', 'temperature') }}"
         night: "{{ now().hour >= 23 or now().hour < 8 }}"
         reserve_valid: >-
-          {{ ((night | bool) and is_number(outside) and (outside | float(0)) <= 20.0)
-             or (not (night | bool)
-                 and is_state('input_boolean.aux_winter_reserve', 'on')
-                 and is_number(room)
-                 and (room | float(0)) < 18.0) }}
+          {{ is_number(outside)
+             and (outside | float(0)) <= 20.0
+             and (((night | bool))
+                  or (not (night | bool)
+                      and is_state('input_boolean.aux_winter_reserve', 'on')
+                      and is_number(room)
+                      and (room | float(0)) < 18.0)) }}
     - choose:
         - conditions:
             - condition: template
