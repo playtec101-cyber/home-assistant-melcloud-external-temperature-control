@@ -1,75 +1,57 @@
 # Home Assistant + Mitsubishi Electric: external room-temperature control
 
-Home Assistant examples for Mitsubishi Electric air conditioners that use **external room-temperature sensors as the real comfort reference** instead of relying only on the sensor inside the indoor unit.
+> **Update 2026-09-11:** If you use the local `pymitsubishi/homeassistant-mitsubishi` integration and **Remote Temperature** works with your adapter/unit, the older target-offset / step-compensation logic is no longer required for the main Mitsubishi room-temperature control. The external Home Assistant sensor can be sent directly to the unit as its room-temperature reference.
 
-This repository documents **three different solution paths**. They represent different stages and architectures and are intentionally kept side by side so users can choose the approach that best fits their installation.
+This repository keeps three solution paths side by side. The older files remain intentionally available as **Legacy/Fallback** material for users who stay on MELCloud/MELCloud Home or cannot use Remote Temperature reliably.
 
 > Not affiliated with Mitsubishi Electric, Home Assistant, AVM, or the authors of the local custom integration.
 
-> Back up your Home Assistant configuration before changing integrations, entity IDs or automations.
+> Back up Home Assistant before changing integrations, entity IDs or automations.
 
 ---
 
-# The three solution paths
+# Which solution should I use?
 
-## 1. Legacy / simulated AUTO with Home Assistant deciding HEAT and COOL
+## 1. Legacy / classic MELCloud
 
-This is the older approach for installations where native Mitsubishi AUTO behavior was not satisfactory.
+Use the older external-sensor / simulated-AUTO / target-compensation approach if that is the architecture your installation still requires.
 
-Home Assistant uses external room-temperature sensor(s) as the real reference and can decide whether the unit should run in HEAT or COOL instead of relying entirely on Mitsubishi's native AUTO decision.
-
-Relevant legacy files include:
+Typical legacy files:
 
 - `living_room_multi_sensor.yaml`
 - `bedroom_single_sensor.yaml`
 - `melcloud_refresh_5min.yaml`
 - `optional_horizontal_swing.yaml`
 
-These files are mainly for the classic/legacy MELCloud integration and should not be copied blindly into MELCloud Home or the local integration because state names, polling behavior and vane values can differ.
+**Status:** still usable, but not the preferred path when the local Mitsubishi integration can use Remote Temperature.
 
 ---
 
-## 2. MELCloud Home primary control with real Mitsubishi AUTO
+## 2. MELCloud Home primary control
 
-This is the cloud-based real-AUTO controller.
+If you intentionally keep cloud control as the primary path, the target-offset automation is still useful.
 
-The user-selected Mitsubishi mode stays unchanged:
+Native mode stays unchanged:
 
 - `AUTO` stays `AUTO`
 - `HEAT` stays `HEAT`
 - `COOL` stays `COOL`
 
-Home Assistant only adjusts the Mitsubishi target temperature from the error between the external room temperature and the desired room temperature.
+Home Assistant compensates the Mitsubishi target from the difference between external room temperature and desired room temperature.
 
-Current complete cloud-primary example:
+Main file:
 
 `melcloud_home_external_temperature_control_public.yaml`
 
-### AUTO correction
-
-AUTO uses fixed 0.5 °C correction steps:
-
-| Absolute room error | Correction |
-| --- | --- |
-| `<= 0.25 °C` | `0.0 °C` |
-| `> 0.25 to 0.75 °C` | `0.5 °C` |
-| `> 0.75 to 1.25 °C` | `1.0 °C` |
-| `> 1.25 to 1.75 °C` | `1.5 °C` |
-| `> 1.75 to 2.25 °C` | `2.0 °C` |
-| `> 2.25 to 2.75 °C` | `2.5 °C` |
-| `> 2.75 °C` | `3.0 °C` |
-
-The sign follows the direction of the room error.
-
-HEAT and COOL use the same `±0.25 °C` neutral zone and, outside it, a linear 1:1 correction.
-
-This cloud-primary example still documents the older optional target back-synchronization pattern. The newer local-primary controller below deliberately uses a different, stricter desired-temperature model.
+**Status:** still relevant for cloud-primary setups.
 
 ---
 
-## 3. Local-primary Mitsubishi control with MELCloud Home as fallback
+## 3. Recommended: local Mitsubishi control with Remote Temperature
 
-This is the current preferred architecture in this repository.
+Tested local integration:
+
+[pymitsubishi/homeassistant-mitsubishi](https://github.com/pymitsubishi/homeassistant-mitsubishi)
 
 Primary path:
 
@@ -77,182 +59,156 @@ Primary path:
 Home Assistant -> local LAN/WLAN -> MAC-577IF2-E -> indoor unit
 ```
 
-Fallback/manual path:
+Optional fallback/manual path:
 
 ```text
 MELCloud Home -> Mitsubishi cloud -> indoor unit
 ```
 
-Tested local custom integration:
+### Setup
 
-[pymitsubishi/homeassistant-mitsubishi](https://github.com/pymitsubishi/homeassistant-mitsubishi)
+1. Reconfigure the Mitsubishi Air Conditioner integration entry.
+2. Enable **Experimental Features**.
+3. Select the desired **External Temperature Sensor**.
+4. Reload the integration if the new entity does not appear immediately.
+5. Open the new **Temperature Source** select entity.
+6. Change it from `Internal` to `Remote`.
+7. Verify that `Remote` remains selected after a Home Assistant restart.
+8. Use the real desired room temperature directly as the climate target.
+9. Disable the old main-unit target-offset / step-compensation automation for that unit.
 
-Current neutral public controller:
+Detailed guide:
 
-`local_primary_hvac_action_aux_heating_example.yaml`
+`REMOTE_TEMPERATURE_RECOMMENDED.md`
 
-Matching helper example:
+### What changes conceptually?
 
-`local_primary_helpers_example.yaml`
-
-Detailed design rationale and change notes:
-
-`LOCAL_CONTROLLER_DESIGN_NOTES.md`
-
-Step-by-step migration guide:
-
-`LOCAL_CONTROL_WITH_MELCLOUD_FALLBACK.md`
-
-### What changed in the local-primary controller
-
-The core room-temperature compensation remains the same: native Mitsubishi AUTO stays native AUTO and Home Assistant adjusts only the target temperature.
-
-The local-primary design adds several important safeguards and behaviors:
-
-- `hvac_action` is used to distinguish active AUTO heating/cooling from compressor-idle periods.
-- Auxiliary heating is allowed in HEAT.
-- In AUTO, `heating` allows auxiliary heating after the normal external-demand checks.
-- In AUTO, `idle` is now treated as **neutral**, not as proof that heating demand has ended. External temperature conditions still decide whether auxiliary heating may actually run.
-- `AUTO + cooling` remains a hard block for every auxiliary heater.
-- `AUTO + unclear/None` remains fail-safe blocked.
-- The desired-temperature helper is authoritative; device target changes are **not** written back into it.
-- The older target back-synchronization automations were removed to eliminate a race/feedback-loop class.
-- The auxiliary radiator target is `desired - 1.0 °C` after a 25-minute demand delay.
-- When the main AC is OFF, a separate winter reserve can hold 18 °C at night and can start a 16 -> 18 °C daytime reserve.
-- The daytime reserve also requires a valid outdoor temperature `<= 20 °C`.
-- The AC-ON and AC-OFF auxiliary-radiator automations are mutually exclusive to avoid duplicate commands.
-- Numeric template conversions use explicit defaults.
-- The fuller production design can additionally use a separate switch-controlled heater with the same `AUTO + idle` interpretation and a restart-safe absolute 4-hour manual deadline.
-
-See `LOCAL_CONTROLLER_DESIGN_NOTES.md` for the full reasoning behind every decision.
-
-### Important `hvac_action` detail
-
-In the local integration implementation, `idle` is returned when the compressor is not operating. It therefore does **not** mean that the external room is necessarily at its desired temperature, and it does not reveal whether the preceding active AUTO phase was heating or cooling.
-
-That is why solution 3 treats `AUTO + idle` as a neutral state for auxiliary heating: it removes the blanket block, while the external room-temperature, outdoor-temperature, timing and hysteresis conditions still decide whether auxiliary heat starts.
-
-`AUTO + cooling` is different and unambiguous: the Mitsubishi is actively cooling, so auxiliary heating is immediately blocked.
-
-### Latest field observation
-
-A test on 2026-09-10 showed an AUTO period in which the external room temperature was above the desired temperature while `hvac_action` stayed `idle` for a while. The same unit later changed to `cooling` **without leaving native AUTO and without Home Assistant forcing COOL**.
-
-Because of that observation, the current AUTO target-correction curve has **not** been steepened and no AUTO->COOL/HEAT override has been added. More real-world cycles should be observed before changing a curve that otherwise works correctly.
-
-A simple way to monitor the state is a temporary Home Assistant Markdown card containing:
-
-```jinja2
-HVAC Action: **{{ state_attr('climate.main_room_ac', 'hvac_action') }}**
-```
-
-### Horizontal vane difference
-
-In the tested local integration:
+Old local compensation path:
 
 ```text
-local integration center: center
+external room temp
+ -> calculate error
+ -> calculate offset / 0.5 °C step
+ -> write artificial Mitsubishi target
 ```
 
-MELCloud Home may use:
+Recommended Remote Temperature path:
 
 ```text
-MELCloud Home center: centre
+external room sensor -> Mitsubishi Remote Temperature
+user desired temp     -> Mitsubishi target temperature
 ```
 
-Both may use `swing` for horizontal swing.
+Example:
 
-### No competing controllers
+```text
+external room average: 24.3 °C
+desired temperature:   23.0 °C
+Mitsubishi target:     23.0 °C
+Temperature Source:    Remote
+```
 
-Do **not** run two complete automation controllers against the same physical Mitsubishi unit at the same time.
+No extra ±0.5 / ±1.0 / ±1.5 °C target correction is required.
 
-MELCloud Home may remain configured as a manual/fallback path, but only one main automation controller should actively regulate the unit.
+### External sensors
+
+For Remote Temperature, prefer independent room sensors over radiator-thermostat temperature readings. Radiator thermostats can be biased by placement close to the radiator.
+
+If several sensors should be combined, a Home Assistant combination/statistics helper using the **arithmetic mean** can be selected as the Remote Temperature source.
+
+### Fallback behavior
+
+If the configured external sensor becomes unavailable or invalid while Home Assistant is running, the integration can fall back to the internal sensor.
+
+Important limitation: if Home Assistant itself or network connectivity to the AC disappears while Remote mode is active, the unit may continue using the last received remote temperature until communication is restored.
+
+Use reliable sensors, monitor battery devices, keep the LAN/WLAN stable and keep a known-good backup/fallback configuration.
 
 ---
 
-# Why the desired-temperature helper is authoritative in solution 3
+# What remains useful from the older automation work?
 
-The local controller intentionally does not copy device target changes back into the desired-temperature helper.
+A lot. Remote Temperature replaces only the **main-unit room-temperature compensation engine**.
 
-Automatic compensation writes and asynchronous device echoes can otherwise race each other. An intermediate target can be mistaken for a user request and create rapid target bouncing.
+The following remain valuable:
 
-Therefore:
+- local MAC-577 control
+- MELCloud Home fallback
+- `hvac_action`
+- auxiliary radiator / heater logic
+- winter reserve
+- away / vacation shutdowns
+- desired-temperature helpers
+- external-sensor averaging
+- vane control
+- restart-safe timers and safety checks
+
+The older offset/step files are therefore kept as Legacy/Fallback material instead of being deleted.
+
+---
+
+# `hvac_action` still matters
+
+The local integration exposes the real operating state:
 
 ```text
-desired-temperature helper = real user intent / source of truth
-climate entity target       = compensated device target
+heating  -> active heating
+cooling  -> active cooling
+idle     -> unit is on, compressor is currently not operating
 ```
 
-If the user wants to change the real desired temperature, dashboards, scripts, voice control or services should change the desired-temperature helper directly.
+This remains important for auxiliary-heating logic.
 
-The `last_automatic_target_*` helpers remain only for detecting the controller's own writes, avoiding unnecessary repeats and supporting the periodic target-delivery retry.
+`idle` does **not** prove that the external room has reached the desired temperature. External room-temperature, outdoor-temperature, timing and hysteresis checks may still be needed before allowing auxiliary heat.
 
----
-
-# Optional auxiliary-heating behavior in solution 3
-
-The focused public controller includes generalized optional logic for two radiator thermostat entities. The fuller production design additionally documents a separate switch-controlled heater in `LOCAL_CONTROLLER_DESIGN_NOTES.md`.
-
-The example defaults are intentionally conservative and must be reviewed for each building:
-
-- radiator release after 25 minutes of stable demand;
-- demand threshold: room at least 0.5 °C below desired;
-- normal auxiliary permission: HEAT or AUTO with `heating`/`idle` plus all external demand checks;
-- hard block: AUTO `cooling`, unclear AUTO action, COOL, DRY, FAN, OFF;
-- outdoor limit for radiator assistance: 20 °C;
-- radiator target after release: desired minus 1.0 °C;
-- AC OFF night reserve: 18 °C from 23:00 to 08:00 when outdoor temperature is valid and <= 20 °C;
-- AC OFF daytime reserve: start below 16 °C, hold until 18 °C, only with valid outdoor temperature <= 20 °C;
-- switch-controlled auxiliary heater outdoor limit in the fuller design: 15 °C;
-- switch-controlled heater automatic stop: desired + 0.5 °C;
-- manual heater runtime limit: 4 hours;
-- 23:00 heater shutdown event.
-
-The 25-minute trigger duration intentionally starts again after Home Assistant restarts. This is fail-safe for this use case: it can delay auxiliary heating, but cannot make it start early.
+`AUTO + cooling` is unambiguous and should remain a hard block for auxiliary heating.
 
 ---
 
-# Installation summary for local-primary control
+# Desired temperature in the Remote Temperature path
 
-1. Back up Home Assistant.
-2. Install and test the local Mitsubishi integration.
-3. Keep MELCloud Home only as fallback/manual control if desired.
-4. Verify local power, target temperature, AUTO, HEAT, COOL and optional vane control.
-5. Display `hvac_action` temporarily on a dashboard and observe AUTO heating, cooling and idle periods.
-6. Create the helpers from `local_primary_helpers_example.yaml` or in the Home Assistant UI.
-7. Replace every placeholder entity ID in `local_primary_hvac_action_aux_heating_example.yaml`.
-8. Review every temperature threshold, schedule and auxiliary-heating rule.
-9. Ensure no second full controller is active against the same unit.
-10. Reload automations or restart Home Assistant.
-11. Test one function at a time and review logs.
+Recommended model:
+
+```text
+desired-temperature helper = user intent / source of truth
+climate target              = same desired temperature (subject to device resolution)
+external room sensor        = real Mitsubishi room-temperature reference
+```
+
+The older compensated-target model is no longer needed for the main AC when Remote Temperature works correctly.
 
 ---
 
 # Files
 
-| File | Purpose |
+| File | Purpose / status |
 | --- | --- |
-| `local_primary_hvac_action_aux_heating_example.yaml` | Focused neutral local-primary example with native AUTO, `hvac_action` gating, authoritative desired temperature, auxiliary radiator heating and winter reserve |
-| `local_primary_helpers_example.yaml` | Matching helpers for the local-primary controller |
-| `LOCAL_CONTROLLER_DESIGN_NOTES.md` | Detailed explanation of the architecture and why each change was made |
-| `LOCAL_CONTROL_WITH_MELCLOUD_FALLBACK.md` | Local-primary architecture, migration and test guide |
-| `melcloud_home_external_temperature_control_public.yaml` | Cloud-primary real-AUTO controller / older MELCloud Home design |
-| `living_room_multi_sensor.yaml` | Legacy external-sensor / simulated-AUTO example |
-| `bedroom_single_sensor.yaml` | Legacy single-sensor example |
-| `melcloud_refresh_5min.yaml` | Optional forced refresh for legacy MELCloud only |
-| `optional_horizontal_swing.yaml` | Legacy/device-dependent horizontal swing example |
-| `helpers_example.yaml` | Generic/older helper examples |
-| `FORUM_POST_LOCAL_EN.md` | Ready-to-adapt English forum post for the local-primary architecture |
+| `REMOTE_TEMPERATURE_RECOMMENDED.md` | **Recommended local guide** |
+| `melcloud_home_external_temperature_control_public.yaml` | Still relevant for MELCloud Home primary control |
+| `living_room_multi_sensor.yaml` | Legacy/Fallback |
+| `bedroom_single_sensor.yaml` | Legacy/Fallback |
+| `melcloud_refresh_5min.yaml` | Legacy MELCloud only |
+| `optional_horizontal_swing.yaml` | Device-dependent legacy/optional example |
+| `local_primary_hvac_action_aux_heating_example.yaml` | Auxiliary/safety logic still useful; its old main-target compensation is not recommended when Remote Temperature is active |
+| `local_primary_helpers_example.yaml` | Helper examples |
+| `LOCAL_CONTROLLER_DESIGN_NOTES.md` | Technical history and design rationale |
+| `LOCAL_CONTROL_WITH_MELCLOUD_FALLBACK.md` | Migration/fallback background; Remote Temperature now takes precedence for main room control |
+| `FORUM_POST_LOCAL_EN.md` | Updated ready-to-adapt forum post for the Remote Temperature path |
 | `SECURITY_PRIVACY.md` | Security and privacy notes |
-| `VALIDATION.txt` | Validation notes |
+
+---
+
+# No competing controllers
+
+Do **not** run two complete main controllers against the same physical Mitsubishi unit at the same time.
+
+MELCloud Home may remain configured as a manual/fallback path, but only one main automation strategy should regulate the unit.
 
 ---
 
 # Security and privacy
 
 Public examples intentionally contain no passwords, cloud credentials, Home Assistant tokens, API keys, webhook IDs, MAC addresses, e-mail addresses, personal names, local IP addresses or private hostnames.
-
-Entity IDs are neutral placeholders.
 
 Before publishing your own adapted configuration, scan it again for credentials and unique network/device identifiers.
 
@@ -268,14 +224,11 @@ Useful feedback includes:
 - Mitsubishi indoor-unit model
 - Wi-Fi adapter model
 - external sensor type
-- observed `hvac_action` during AUTO heating/cooling/idle
-- target-temperature behavior
-- duration of AUTO idle periods before heating/cooling resumes
-- auxiliary-heating behavior
-- horizontal-vane behavior
-- behavior during Internet or Home Assistant outages
-- IR-remote synchronization behavior, if tested
-
-Please do not post credentials, access tokens, e-mail addresses or private network information.
+- Remote Temperature behavior
+- `hvac_action` transitions
+- behavior during Home Assistant or network outages
+- fallback to internal sensor
+- vane behavior
+- auxiliary-heating interaction
 
 Issues, test results and improvements are welcome.
