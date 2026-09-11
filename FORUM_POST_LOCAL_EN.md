@@ -1,40 +1,46 @@
-# Update 2026-09-11: local Mitsubishi Remote Temperature is now the preferred path
+# Mitsubishi + Home Assistant: four external-temperature control paths — Remote Temperature now recommended
 
-If you use the local `pymitsubishi/homeassistant-mitsubishi` integration and its **Remote Temperature** feature works with your adapter/unit, the older Home Assistant target-offset / step-compensation logic is no longer needed for the main room-temperature control.
+> **Update 2026-09-11:** For users of the local `pymitsubishi/homeassistant-mitsubishi` integration, **Remote Temperature** is now the simplest recommended path. If it works with your adapter/unit, the older Home Assistant offset / step-compensation logic is no longer needed for the main Mitsubishi room-temperature control.
 
-The recommended local setup is now:
+## The four solution paths
 
-```text
-Home Assistant external room sensor
-        -> Mitsubishi Remote Temperature
+### 1. Home Assistant simulates AUTO and chooses HEAT or COOL
 
-User desired temperature
-        -> Mitsubishi target temperature
-```
+Home Assistant decides from external room sensors whether the Mitsubishi should run in `HEAT` or `COOL`.
 
-No extra ±0.5 / ±1.0 / ±1.5 °C target correction is required.
+**Status:** legacy/fallback. Useful only if native Mitsubishi AUTO is not suitable for the installation.
 
-## Three solution paths
+### 2. MELCloud Home + native Mitsubishi AUTO + target offset
 
-### 1. Legacy / classic MELCloud
+Mitsubishi `AUTO` stays native `AUTO`. Home Assistant does not switch HVAC modes; it only compensates the target temperature from the difference between external room temperature and desired room temperature.
 
-Keep the older Home Assistant offset/simulated-AUTO approach if that is the architecture you still use.
+**Status:** still relevant for cloud-primary MELCloud Home setups.
 
-### 2. MELCloud Home primary
+### 3. Local `pymitsubishi` + native AUTO + target offset
 
-The target-correction automation remains useful if you intentionally keep cloud control as the primary path.
-
-### 3. Recommended: local Mitsubishi integration + Remote Temperature
-
-Local path:
+Control is local through the Mitsubishi adapter, native AUTO is preserved, but Home Assistant still applies the older offset/step method:
 
 ```text
-Home Assistant -> local LAN/WLAN -> MAC-577IF2-E -> Mitsubishi indoor unit
+external room temperature
+-> calculate error
+-> offset / fixed 0.5 °C step
+-> artificial Mitsubishi target
 ```
 
-MELCloud Home may remain configured as a manual fallback.
+**Status:** local fallback if Remote Temperature is unavailable or unreliable.
 
-## Setup
+### 4. Local `pymitsubishi` + Remote Temperature — recommended
+
+Recommended current path:
+
+```text
+external room sensor -> Mitsubishi Remote Temperature
+user desired temp     -> Mitsubishi target temperature
+```
+
+The Mitsubishi receives the real external room temperature directly and can use its own inverter/native AUTO logic against the real desired target.
+
+## Remote Temperature setup
 
 1. Open the Mitsubishi Air Conditioner integration entry.
 2. Reconfigure it.
@@ -53,9 +59,15 @@ A Home Assistant combination/statistics helper using the **arithmetic mean** can
 
 Independent room sensors are preferable to radiator-thermostat temperature values because thermostat placement near a radiator can bias the measurement.
 
-## What remains useful from the older automation work?
+## Fallback note
 
-A lot:
+If the external sensor becomes invalid while Home Assistant is running, the integration can fall back to the internal sensor.
+
+If Home Assistant itself or network connectivity to the AC is lost while Remote mode is active, the unit may continue using the last received Remote Temperature until communication returns.
+
+## What remains useful from the older work?
+
+Remote Temperature replaces only the main AC temperature-compensation engine. Still useful are:
 
 - local MAC-577 control
 - MELCloud Home fallback
@@ -68,34 +80,10 @@ A lot:
 - vane control
 - restart-safe timers and safety checks
 
-Only the old **main Mitsubishi target compensation** becomes unnecessary when Remote Temperature works correctly.
-
-## `hvac_action`
-
-The local integration still exposes the real operating state:
-
-```text
-heating  -> active heating
-cooling  -> active cooling
-idle     -> compressor currently not operating
-```
-
-This remains useful for auxiliary-heating logic. `idle` should not be interpreted as proof that the room is already at the desired temperature.
-
-## Important fallback note
-
-If the external sensor becomes invalid while Home Assistant is running, the integration can fall back to the internal sensor.
-
-If Home Assistant itself or network connectivity to the AC is lost while Remote mode is active, the unit may continue using the last received Remote Temperature until communication returns.
-
-That is why reliable sensors, a stable LAN/WLAN and a known-good fallback/backup are recommended.
-
-Full updated documentation:
+Full documentation with all four paths:
 
 https://github.com/playtec101/home-assistant-melcloud-external-temperature-control
 
-Recommended local guide:
+Recommended Remote Temperature guide:
 
-`REMOTE_TEMPERATURE_RECOMMENDED.md`
-
-The older offset YAML files are intentionally kept as Legacy/Fallback material for users who cannot or do not want to use Remote Temperature.
+https://github.com/playtec101/home-assistant-melcloud-external-temperature-control/blob/main/REMOTE_TEMPERATURE_RECOMMENDED.md
