@@ -1,10 +1,24 @@
-# Mitsubishi + Home Assistant: externe Raumtemperatur ohne Offset – Remote Temperature
+# Mitsubishi + Home Assistant: vier Wege für externe Raumtemperatur – Remote Temperature jetzt empfohlen
 
-> **Update 11.09.2026:** Für Nutzer der lokalen Integration `pymitsubishi/homeassistant-mitsubishi` ist ein deutlich einfacherer Weg verfügbar: **Remote Temperature**. Wenn diese Funktion mit dem eigenen Mitsubishi-Adapter/Klimagerät funktioniert, wird die bisherige Offset-/Stufenlogik für die Hauptklima nicht mehr benötigt.
+> **Update 11.09.2026:** Für Nutzer der lokalen Integration `pymitsubishi/homeassistant-mitsubishi` ist mit **Remote Temperature** inzwischen ein deutlich einfacherer Weg verfügbar. Wenn diese Funktion mit dem eigenen Mitsubishi-Adapter/Klimagerät funktioniert, wird die bisherige Offset-/Stufenlogik für die Hauptklima nicht mehr benötigt.
 
-## Kurzfassung
+## Die vier möglichen Wege
 
-Bisher:
+### 1. Home Assistant simuliert AUTO und wählt HEAT oder COOL
+
+Home Assistant entscheidet anhand externer Raumfühler selbst, ob die Mitsubishi in `HEAT` oder `COOL` laufen soll.
+
+**Status:** ältere/Legacy-Lösung. Sinnvoll nur, wenn der native Mitsubishi-AUTO-Modus nicht verwendet werden soll oder nicht zufriedenstellend arbeitet.
+
+### 2. MELCloud Home + echter Mitsubishi-AUTO + Sollwert-Offset
+
+AUTO bleibt echtes Mitsubishi-AUTO. Home Assistant schaltet den Modus nicht um, sondern korrigiert nur den Gerätesollwert anhand der externen Raumtemperatur.
+
+**Status:** weiterhin sinnvoll, wenn MELCloud Home bewusst der Primärweg bleiben soll.
+
+### 3. Lokale `pymitsubishi`-Integration + echter AUTO + Sollwert-Offset
+
+Die Steuerung läuft lokal über den Mitsubishi-Adapter. AUTO bleibt echtes Mitsubishi-AUTO, aber Home Assistant verwendet weiterhin die bisherige Offset-/Stufenlogik.
 
 ```text
 externe Raumtemperatur
@@ -13,6 +27,10 @@ externe Raumtemperatur
 -> künstlichen Mitsubishi-Sollwert setzen
 ```
 
+**Status:** lokaler Fallback, wenn Remote Temperature nicht verfügbar oder nicht zuverlässig nutzbar ist.
+
+### 4. Lokale `pymitsubishi`-Integration + Remote Temperature — empfohlen
+
 Jetzt empfohlen:
 
 ```text
@@ -20,16 +38,9 @@ externer Raumfühler -> Mitsubishi Remote Temperature
 Wunschtemperatur    -> Mitsubishi-Sollwert
 ```
 
-Die Mitsubishi bekommt also direkt die reale externe Raumtemperatur und regelt mit ihrer eigenen Inverter-/AUTO-Logik auf den echten Wunschwert.
+Die Mitsubishi bekommt direkt die reale externe Raumtemperatur und regelt mit ihrer eigenen Inverter-/AUTO-Logik auf den echten Wunschwert.
 
-## Voraussetzungen
-
-- Home Assistant
-- lokale Integration `pymitsubishi/homeassistant-mitsubishi`
-- Mitsubishi-Adapter/Innengerät mit funktionierender Remote-Temperature-Unterstützung
-- externer Temperaturfühler oder ein HA-Durchschnittssensor
-
-## Einrichtung
+## Einrichtung von Remote Temperature
 
 1. Mitsubishi-Air-Conditioner-Integration öffnen.
 2. **Experimental Features** aktivieren.
@@ -61,19 +72,14 @@ Remote Temperature ersetzt nur die Haupt-Temperaturkompensation. Weiterhin nütz
 - Zusatzheizungen / Heizkörperlogik
 - Winterreserve
 - Urlaubs-/Sicherheitsabschaltungen
+- Wunschtemperatur-Helfer
 - Sensor-Durchschnitt
 - Lamellensteuerung
 - Restart-/Fallback-Logik
 
-## Ältere Wege
+## Vollständige Dokumentation
 
-Die alten Offset-/Stufenlösungen bleiben als Fallback relevant für:
-
-1. klassische/Legacy-MELCloud-Installationen;
-2. MELCloud Home als bewussten Primärweg;
-3. lokale Installationen, bei denen Remote Temperature nicht zuverlässig funktioniert.
-
-Aktuelle vollständige Anleitung und Legacy-Dateien:
+Übersicht aller vier Wege:
 
 https://github.com/playtec101/home-assistant-melcloud-external-temperature-control
 
