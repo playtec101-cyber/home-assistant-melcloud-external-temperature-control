@@ -1,40 +1,55 @@
-# Deutsche Kurzfassung
+# Home Assistant + Mitsubishi Electric – externe Raumtemperatur
 
-Dieses Repository zeigt Home-Assistant-Regelungen für Mitsubishi-Electric-Klimaanlagen mit **externen Raumtemperatursensoren als Komfortreferenz**.
+> **Update 11.09.2026:** Nutzer der lokalen Integration `pymitsubishi/homeassistant-mitsubishi`, bei denen **Remote Temperature** funktioniert, benötigen die bisherige Offset-/Stufenlogik für die Hauptklima nicht mehr. Stattdessen wird der externe Raumfühler direkt an die Mitsubishi übergeben. Der Geräte-Sollwert bleibt der echte Wunschwert.
 
-Es gibt drei bewusst getrennte Lösungswege.
+Dieses Repository dokumentiert weiterhin drei Lösungswege. Die älteren Varianten bleiben bewusst als **Legacy/Fallback** erhalten, damit Nutzer ohne funktionierende lokale Remote-Temperature-Unterstützung weiterhin eine Lösung haben.
 
-## Lösung 1 – älterer / simulierter AUTO-Betrieb
+---
 
-Home Assistant entscheidet selbst zwischen HEAT und COOL. Diese Variante bleibt als ältere Lösung für Installationen dokumentiert, bei denen der native Mitsubishi-AUTO-Modus nicht zufriedenstellend arbeitet.
+## Welche Lösung soll ich nehmen?
 
-Relevante Dateien:
+### Lösung 1 – Legacy / klassische MELCloud-Regelung
+
+Für ältere Installationen oder Setups, bei denen Home Assistant HEAT/COOL selbst steuern bzw. den Gerätesollwert kompensieren muss.
+
+Typische Dateien:
 
 - `living_room_multi_sensor.yaml`
 - `bedroom_single_sensor.yaml`
 - `melcloud_refresh_5min.yaml`
 - `optional_horizontal_swing.yaml`
 
+**Status:** weiterhin nutzbar, aber nicht mehr der bevorzugte Weg für eine funktionierende lokale Mitsubishi-Integration mit Remote Temperature.
+
 ---
 
-## Lösung 2 – MELCloud Home als Primärweg, echter Mitsubishi-AUTO-Modus
+### Lösung 2 – MELCloud Home als Primärweg
 
-AUTO bleibt AUTO, HEAT bleibt HEAT und COOL bleibt COOL. Home Assistant korrigiert nur den Geräte-Sollwert anhand der externen Raumtemperatur.
+Wenn die Cloud-Steuerung bewusst beibehalten werden soll, bleibt die Offset-/Automationslösung sinnvoll:
+
+- AUTO bleibt AUTO
+- HEAT bleibt HEAT
+- COOL bleibt COOL
+- Home Assistant korrigiert den Mitsubishi-Sollwert anhand der externen Raumtemperatur
 
 Datei:
 
 `melcloud_home_external_temperature_control_public.yaml`
 
-Diese Cloud-Variante enthält noch die ältere optionale Rücksynchronisierung von Geräte-Sollwerten in den Wunschtemperatur-Helfer.
+**Status:** weiterhin sinnvoll für Cloud-Primärbetrieb.
 
 ---
 
-## Lösung 3 – lokale Primärsteuerung, MELCloud Home nur als Fallback
+### Lösung 3 – empfohlen: lokale Mitsubishi-Integration mit Remote Temperature
 
-Das ist die aktuelle bevorzugte Architektur.
+Getestete Integration:
+
+`pymitsubishi/homeassistant-mitsubishi`
+
+Primärweg:
 
 ```text
-Home Assistant -> lokales Netzwerk -> MAC-577IF2-E -> Klimaanlage
+Home Assistant -> lokales LAN/WLAN -> MAC-577IF2-E -> Klimaanlage
 ```
 
 MELCloud Home kann parallel als manueller Fallback bestehen bleiben:
@@ -43,143 +58,115 @@ MELCloud Home kann parallel als manueller Fallback bestehen bleiben:
 MELCloud Home -> Mitsubishi Cloud -> Klimaanlage
 ```
 
-Getestete lokale Integration:
+### Einrichtung
 
-`pymitsubishi/homeassistant-mitsubishi`
+1. In der lokalen Mitsubishi-Integration **Experimental Features** aktivieren.
+2. Unter **External Temperature Sensor** den gewünschten externen Raumfühler auswählen.
+3. Danach bei der neuen Entität **Temperature Source** den Wert von `Internal` auf `Remote` stellen.
+4. Die Wunschtemperatur direkt als Gerätesollwert setzen.
+5. Keine zusätzliche Offset-/Stufenberechnung mehr für die Hauptklima verwenden.
 
-Aktuelle neutrale öffentliche Datei:
-
-`local_primary_hvac_action_aux_heating_example.yaml`
-
-Passende Helfer:
-
-`local_primary_helpers_example.yaml`
-
-Ausführliche technische Begründung aller Änderungen:
-
-`LOCAL_CONTROLLER_DESIGN_NOTES.md`
-
-Migrations- und Testanleitung:
-
-`LOCAL_CONTROL_WITH_MELCLOUD_FALLBACK.md`
-
-### Die wichtigsten Änderungen der lokalen Version
-
-Der native AUTO-Modus bleibt erhalten. Home Assistant korrigiert weiterhin nur den Geräte-Sollwert anhand der externen Raumtemperatur.
-
-Die lokale Integration liefert zusätzlich `hvac_action`. Entscheidend ist die neue Interpretation von `idle`:
+Beispiel:
 
 ```text
-HEAT            -> Zusatzheizung darf nach weiteren Bedingungen helfen
-AUTO + heating  -> Zusatzheizung darf nach weiteren Bedingungen helfen
-AUTO + idle     -> neutral: Zusatzheizung darf nur dann helfen, wenn die externen Bedarfsbedingungen erfüllt sind
-AUTO + cooling  -> harte Sperre
-AUTO + unklar   -> harte Sperre
-COOL/DRY/FAN    -> harte Sperre
-OFF             -> normale Zusatzheizung aus, nur separate Winterreserve möglich
+Externer Raumfühler: 24,3 °C
+Wunschtemperatur:    23,0 °C
+Geräte-Sollwert:     23,0 °C
+Temperature Source:  Remote
 ```
 
-`idle` wird **nicht** als Heizen interpretiert. Es ist lediglich kein pauschaler Sperrzustand mehr. Hintergrund: Die lokale Integration liefert `idle`, sobald der Verdichter gerade nicht arbeitet. Daraus folgt nicht, dass der externe Raum bereits auf Wunschtemperatur ist.
+Die Mitsubishi erhält damit die externe Raumtemperatur als Regelgröße und entscheidet selbst über Heizen, Kühlen oder Idle.
 
-Damit bleiben die externen Sensoren entscheidend: FRITZ!-Zusatzheizung nur bei echter Untertemperatur und nach 25 Minuten; ein separater Zusatzheizer nur nach seiner eigenen Temperaturbedingung.
+### Wichtig
 
-`AUTO + cooling` bleibt dagegen immer gesperrt, damit Klimaanlage und Zusatzheizung nie gegeneinander arbeiten.
+Bei `Remote` ist der externe Sensor die führende Raumtemperaturquelle. Der interne Mitsubishi-Sensor bleibt als interner/Fallback-Wert vorhanden, ist aber im normalen Remote-Betrieb nicht mehr die Komfortreferenz.
 
-### Wunschtemperatur ist autoritativ
+Wenn der externe Sensor während laufendem Home Assistant ungültig/unavailable wird, kann die Integration auf den internen Sensor zurückfallen. Fällt dagegen Home Assistant oder die Netzwerkverbindung zur Klimaanlage vollständig aus, kann die Anlage den zuletzt empfangenen Remote-Wert zunächst weiterverwenden. Deshalb: Sensorqualität, HA-Verfügbarkeit und Netzwerkstabilität beachten.
 
-Die lokale Version schreibt Geräte-Sollwertänderungen bewusst **nicht** mehr zurück in den Wunschtemperatur-Helfer.
+### Externe Sensoren
 
-Grund: Automatische Sollwertkorrekturen und verzögerte Geräte-Rückmeldungen können sich zeitlich überholen. Dadurch kann ein Zwischenwert fälschlich als neuer Benutzerwunsch interpretiert werden und eine Rückkopplungsschleife entstehen.
+Für Remote Temperature sollte möglichst ein echter, unabhängiger Raumfühler verwendet werden. Heizkörperthermostate messen oft zu nah am Heizkörper und können den Raumwert verfälschen.
 
-Deshalb gilt:
+Bei mehreren Sensoren kann ein Home-Assistant-Kombinationssensor mit **arithmetischem Mittel** verwendet werden. Dieser Average wird dann als Remote-Sensor ausgewählt.
+
+---
+
+## Was bleibt von der bisherigen YAML-Arbeit relevant?
+
+Sehr viel. Nur der **Temperatur-Kompensationsmotor der Hauptklima** wird bei Lösung 3 ersetzt.
+
+Weiterhin relevant bleiben z. B.:
+
+- lokale MAC-577-Anbindung
+- MELCloud-Home-Fallback
+- `hvac_action`
+- Zusatzheizungslogik
+- FRITZ!DECT-Freigaben
+- Winterreserve
+- Urlaubs-/Sicherheitsabschaltungen
+- Wunschtemperatur-Helfer
+- Sensor-Average
+- Lamellensteuerung
+- Restart-/Fallback-Sicherheit
+
+Die bisherigen Offset-/Stufen-Dateien bleiben deshalb als Legacy/Fallback dokumentiert und werden nicht gelöscht.
+
+---
+
+## `hvac_action`
+
+Die lokale Integration liefert den echten Betriebszustand:
+
+```text
+heating  -> Anlage heizt aktiv
+cooling  -> Anlage kühlt aktiv
+idle     -> Anlage ist eingeschaltet, Verdichter arbeitet gerade nicht
+```
+
+Für Zusatzheizungen bleibt diese Information wichtig. `idle` ist kein Beweis dafür, dass der Raum bereits warm genug ist. Externe Temperaturbedingungen und Hysteresen müssen weiterhin entscheiden, ob Zusatzwärme erforderlich ist.
+
+`AUTO + cooling` bleibt dagegen ein klarer Sperrzustand für Zusatzheizungen.
+
+---
+
+## Wunschtemperatur
+
+Im empfohlenen Remote-Temperature-Weg gilt:
 
 ```text
 Wunschtemperatur-Helfer = Benutzerwunsch / Quelle der Wahrheit
-Klima-Sollwert           = automatisch kompensierter Gerätewert
+Klima-Sollwert           = derselbe Wunschwert (nur Geräteauflösung beachten)
+Externer Sensor          = reale Raumtemperaturquelle für Mitsubishi
 ```
 
-Der Helfer für den zuletzt automatisch gesetzten Zielwert bleibt nur zur Erkennung eigener Schreibvorgänge, zur Vermeidung unnötiger Wiederholungen und für den Sicherheits-Retry erhalten.
-
-### AUTO-Korrektur
-
-Die bisherige AUTO-Kennlinie bleibt unverändert:
-
-| Absolute Raumabweichung | Korrektur |
-| --- | --- |
-| `<= 0,25 °C` | `0,0 °C` |
-| `> 0,25 bis 0,75 °C` | `0,5 °C` |
-| `> 0,75 bis 1,25 °C` | `1,0 °C` |
-| `> 1,25 bis 1,75 °C` | `1,5 °C` |
-| `> 1,75 bis 2,25 °C` | `2,0 °C` |
-| `> 2,25 bis 2,75 °C` | `2,5 °C` |
-| `> 2,75 °C` | `3,0 °C` |
-
-HEAT und COOL verwenden dieselbe Neutralzone von ±0,25 °C und außerhalb davon eine lineare 1:1-Korrektur.
-
-### Warum die AUTO-Kennlinie vorerst nicht verschärft wurde
-
-Bei einem Praxistest am 10.09.2026 lag die externe Raumtemperatur deutlich über der Wunschtemperatur, während `hvac_action` eine Zeit lang `idle` meldete. Zunächst sah das nach einer zu schwachen AUTO-Anregung aus.
-
-Ohne dass Home Assistant den HVAC-Modus änderte, wechselte die Mitsubishi anschließend selbstständig von `idle` auf `cooling` und blieb dabei vollständig im nativen AUTO-Modus.
-
-Darum wurde die Kennlinie **nicht vorschnell steiler gemacht** und es gibt weiterhin keinen erzwungenen AUTO->COOL/HEAT-Fallback. Erst mehrere reale Zyklen sollen zeigen, ob eine Änderung überhaupt nötig ist.
-
-Zum Beobachten kann eine temporäre Markdown-Karte verwendet werden:
-
-```jinja2
-HVAC Action: **{{ state_attr('climate.hauptraum_ac', 'hvac_action') }}**
-```
-
-### Optionale Zusatzthermostate
-
-Die neutrale Beispielkonfiguration enthält zwei optionale Heizkörper-/Zusatzthermostate.
-
-Freigabe erst nach 25 Minuten stabiler Untertemperatur von mindestens 0,5 °C, nur bei HEAT oder AUTO mit `heating`/`idle` und nur bei geeigneter Außentemperatur. Bei Freigabe wird als Beispiel `Wunsch - 1,0 °C` gesetzt.
-
-Ein Wechsel `heating -> idle` setzt den 25-Minuten-Zähler nicht allein deshalb zurück, solange der externe Heizbedarf weiterhin besteht. `cooling`, unklarer AUTO-Zustand oder der Wegfall einer externen Bedingung beendet die Freigabe dagegen sofort.
-
-Der 25-Minuten-`for:`-Trigger beginnt nach einem Home-Assistant-Neustart bewusst neu. Das kann Zusatzheizung nur verzögern, niemals zu früh einschalten.
-
-### Winterreserve bei ausgeschalteter Klimaanlage
-
-Wenn die Hauptklima AUS ist:
-
-- nachts 23:00–08:00: Beispielziel 18 °C bei gültiger Außentemperatur <=20 °C;
-- tagsüber normalerweise AUS;
-- fällt die Raumtemperatur unter 16 °C und ist die Außentemperatur gültig <=20 °C, startet eine Tages-Winterreserve und hält bis 18 °C.
-
-Die Reserve endet ebenfalls bei ungültiger/zu warmer Außentemperatur, eingeschalteter Hauptklima oder Abwesenheit.
-
-Die Klima-AUS-Winterlogik und die Klima-NICHT-AUS-Zusatzlogik sind hart getrennt, damit nicht zwei Automationen gleichzeitig dieselben Thermostate ansteuern.
-
-### Separater Zusatzheizer
-
-Der vollständige Produktionsaufbau kann zusätzlich einen schaltbaren Zusatzheizer enthalten. Für ihn gilt dieselbe AUTO-Interpretation: HEAT sowie AUTO+heating/idle dürfen nach den eigenen externen Bedingungen freigeben; AUTO+cooling/unklar sowie COOL/OFF sperren.
-
-Ein manueller Lauf kann auf vier Stunden begrenzt werden. Der absolute Endzeitpunkt wird in einem `input_datetime` gespeichert und bleibt damit über Neustarts erhalten.
-
-23:00 kann ein einmaliges hartes Abschaltereignis bleiben.
-
-### Template-Sicherheit
-
-Alle relevanten `float(...)`-Konvertierungen verwenden explizite Defaults. Ungültige oder nicht verfügbare Sensorwerte führen in den Heizfreigaben zum sicheren Sperrzustand.
-
-### Horizontale Lamelle
-
-Bei der getesteten lokalen Integration lautet die Mittelstellung:
+Damit entfällt die frühere Logik:
 
 ```text
-center
+interner Sensor -> Fehler berechnen -> Offset/Stufe -> künstlicher Gerätesollwert
 ```
 
-MELCloud Home kann dagegen `centre` verwenden.
+---
+
+## Bestehende Dateien / Archiv
+
+| Datei | Status |
+| --- | --- |
+| `melcloud_home_external_temperature_control_public.yaml` | weiterhin sinnvoll für MELCloud-Home-Primärbetrieb |
+| `living_room_multi_sensor.yaml` | Legacy/Fallback |
+| `bedroom_single_sensor.yaml` | Legacy/Fallback |
+| `melcloud_refresh_5min.yaml` | Legacy MELCloud |
+| `optional_horizontal_swing.yaml` | geräteabhängige Legacy-Ergänzung |
+| `local_primary_hvac_action_aux_heating_example.yaml` | Zusatz-/Sicherheitslogik weiterhin nützlich, Temperaturkompensation für Remote-Betrieb nicht mehr empfohlen |
+| `LOCAL_CONTROLLER_DESIGN_NOTES.md` | technische Historie / Designentscheidungen |
+| `LOCAL_CONTROL_WITH_MELCLOUD_FALLBACK.md` | Migrations-/Fallback-Hintergrund; Remote Temperature hat für die Hauptregelung Vorrang |
+| `REMOTE_TEMPERATURE_RECOMMENDED.md` | neue empfohlene Anleitung |
 
 ---
 
 ## Wichtig
 
-Nicht zwei vollständige Hauptregelungen gleichzeitig gegen dieselben Klimageräte laufen lassen.
+Nicht zwei vollständige Hauptregelungen gleichzeitig gegen dieselbe Klimaanlage laufen lassen.
 
-Die veröffentlichten Beispiele enthalten keine IP-Adressen, Passwörter, Tokens, API-Keys, E-Mail-Adressen, MAC-Adressen, privaten Hostnamen oder persönlichen Namen. Entity-IDs sind neutrale Platzhalter.
+Die veröffentlichten Beispiele enthalten keine Passwörter, Tokens, API-Keys, E-Mail-Adressen, privaten IP-/MAC-Adressen oder persönlichen Namen.
 
-Das Verhalten von `hvac_action` sollte über mehrere echte AUTO-Heiz-/Kühl-/Idle-Zyklen beobachtet werden, bevor die AUTO-Kennlinie weiter verändert wird.
+Feedback von anderen Mitsubishi-/MAC-577IF2-E-Nutzern ist willkommen – besonders zu Remote Temperature, AUTO, `hvac_action`, Sensor-Fallback, Polling und Verhalten bei HA-/Netzwerkausfall.
