@@ -1,172 +1,73 @@
-# Home Assistant + Mitsubishi Electric – externe Raumtemperatur
+# Mitsubishi + Home Assistant: externe Raumtemperatur
 
-> **Update 11.09.2026:** Nutzer der lokalen Integration `pymitsubishi/homeassistant-mitsubishi`, bei denen **Remote Temperature** funktioniert, benötigen die bisherige Offset-/Stufenlogik für die Hauptklima nicht mehr. Stattdessen wird der externe Raumfühler direkt an die Mitsubishi übergeben. Der Geräte-Sollwert bleibt der echte Wunschwert.
+> **Update 11.09.2026:** Für die lokale Integration `pymitsubishi/homeassistant-mitsubishi` ist **Remote Temperature jetzt der empfohlene Weg**. Wenn diese Funktion mit Adapter und Klimagerät funktioniert, wird die bisherige Offset-/Stufenlogik für die Hauptregelung nicht mehr benötigt.
 
-Dieses Repository dokumentiert weiterhin drei Lösungswege. Die älteren Varianten bleiben bewusst als **Legacy/Fallback** erhalten, damit Nutzer ohne funktionierende lokale Remote-Temperature-Unterstützung weiterhin eine Lösung haben.
+## Aktuell empfohlene Einrichtung
+
+In der lokalen Mitsubishi-Integration:
+
+1. **Experimental Features** aktivieren
+2. unter **External Temperature Sensor** den echten Raumfühler oder einen HA-Durchschnittssensor auswählen
+3. **Temperature Source** auf `Remote` stellen
+4. als Mitsubishi-Sollwert direkt die echte Wunschtemperatur verwenden
+5. alte Offset-/Stufenregelung für die Hauptklima deaktivieren
+
+Aktuelle Anleitung:
+
+**[`REMOTE_TEMPERATURE_RECOMMENDED.md`](REMOTE_TEMPERATURE_RECOMMENDED.md)**
+
+Das Prinzip ist jetzt:
+
+```text
+externer Raumfühler -> Mitsubishi Remote Temperature
+Wunschtemperatur    -> Mitsubishi-Sollwert
+```
+
+Keine künstliche +0,5 / +1,0 / +1,5 °C Sollwertkorrektur mehr, wenn Remote Temperature zuverlässig funktioniert.
 
 ---
 
-## Welche Lösung soll ich nehmen?
+## Die drei Lösungswege
 
-### Lösung 1 – Legacy / klassische MELCloud-Regelung
+### 1. Legacy / klassische MELCloud-Regelung
 
-Für ältere Installationen oder Setups, bei denen Home Assistant HEAT/COOL selbst steuern bzw. den Gerätesollwert kompensieren muss.
+Die älteren externen Sensor-/Offset-Lösungen bleiben als Fallback für Anlagen erhalten, die den lokalen Remote-Temperature-Weg nicht nutzen können.
 
-Typische Dateien:
+### 2. MELCloud Home als Primärweg
 
-- `living_room_multi_sensor.yaml`
-- `bedroom_single_sensor.yaml`
-- `melcloud_refresh_5min.yaml`
-- `optional_horizontal_swing.yaml`
-
-**Status:** weiterhin nutzbar, aber nicht mehr der bevorzugte Weg für eine funktionierende lokale Mitsubishi-Integration mit Remote Temperature.
-
----
-
-### Lösung 2 – MELCloud Home als Primärweg
-
-Wenn die Cloud-Steuerung bewusst beibehalten werden soll, bleibt die Offset-/Automationslösung sinnvoll:
-
-- AUTO bleibt AUTO
-- HEAT bleibt HEAT
-- COOL bleibt COOL
-- Home Assistant korrigiert den Mitsubishi-Sollwert anhand der externen Raumtemperatur
-
-Datei:
+Wer bewusst bei der Cloud-Steuerung bleibt, kann die Offset-Automation weiterverwenden:
 
 `melcloud_home_external_temperature_control_public.yaml`
 
-**Status:** weiterhin sinnvoll für Cloud-Primärbetrieb.
+### 3. Lokale Mitsubishi-Integration mit Remote Temperature — empfohlen
+
+```text
+Home Assistant -> lokales LAN/WLAN -> MAC-577IF2-E -> Mitsubishi
+```
+
+MELCloud Home kann parallel als manueller Fallback bestehen bleiben.
 
 ---
 
-### Lösung 3 – empfohlen: lokale Mitsubishi-Integration mit Remote Temperature
+## Was von der bisherigen Arbeit weiter wichtig bleibt
 
-Getestete Integration:
+Remote Temperature ersetzt nur die **Temperaturkompensation der Hauptklima**. Weiterhin nützlich bleiben:
 
-`pymitsubishi/homeassistant-mitsubishi`
-
-Primärweg:
-
-```text
-Home Assistant -> lokales LAN/WLAN -> MAC-577IF2-E -> Klimaanlage
-```
-
-MELCloud Home kann parallel als manueller Fallback bestehen bleiben:
-
-```text
-MELCloud Home -> Mitsubishi Cloud -> Klimaanlage
-```
-
-### Einrichtung
-
-1. In der lokalen Mitsubishi-Integration **Experimental Features** aktivieren.
-2. Unter **External Temperature Sensor** den gewünschten externen Raumfühler auswählen.
-3. Danach bei der neuen Entität **Temperature Source** den Wert von `Internal` auf `Remote` stellen.
-4. Die Wunschtemperatur direkt als Gerätesollwert setzen.
-5. Keine zusätzliche Offset-/Stufenberechnung mehr für die Hauptklima verwenden.
-
-Beispiel:
-
-```text
-Externer Raumfühler: 24,3 °C
-Wunschtemperatur:    23,0 °C
-Geräte-Sollwert:     23,0 °C
-Temperature Source:  Remote
-```
-
-Die Mitsubishi erhält damit die externe Raumtemperatur als Regelgröße und entscheidet selbst über Heizen, Kühlen oder Idle.
-
-### Wichtig
-
-Bei `Remote` ist der externe Sensor die führende Raumtemperaturquelle. Der interne Mitsubishi-Sensor bleibt als interner/Fallback-Wert vorhanden, ist aber im normalen Remote-Betrieb nicht mehr die Komfortreferenz.
-
-Wenn der externe Sensor während laufendem Home Assistant ungültig/unavailable wird, kann die Integration auf den internen Sensor zurückfallen. Fällt dagegen Home Assistant oder die Netzwerkverbindung zur Klimaanlage vollständig aus, kann die Anlage den zuletzt empfangenen Remote-Wert zunächst weiterverwenden. Deshalb: Sensorqualität, HA-Verfügbarkeit und Netzwerkstabilität beachten.
-
-### Externe Sensoren
-
-Für Remote Temperature sollte möglichst ein echter, unabhängiger Raumfühler verwendet werden. Heizkörperthermostate messen oft zu nah am Heizkörper und können den Raumwert verfälschen.
-
-Bei mehreren Sensoren kann ein Home-Assistant-Kombinationssensor mit **arithmetischem Mittel** verwendet werden. Dieser Average wird dann als Remote-Sensor ausgewählt.
-
----
-
-## Was bleibt von der bisherigen YAML-Arbeit relevant?
-
-Sehr viel. Nur der **Temperatur-Kompensationsmotor der Hauptklima** wird bei Lösung 3 ersetzt.
-
-Weiterhin relevant bleiben z. B.:
-
-- lokale MAC-577-Anbindung
-- MELCloud-Home-Fallback
+- lokale MAC-577-Steuerung
 - `hvac_action`
 - Zusatzheizungslogik
-- FRITZ!DECT-Freigaben
 - Winterreserve
-- Urlaubs-/Sicherheitsabschaltungen
-- Wunschtemperatur-Helfer
-- Sensor-Average
+- Urlaubs-/Sicherheitslogik
+- Sensor-Durchschnitt
 - Lamellensteuerung
-- Restart-/Fallback-Sicherheit
+- Neustart-/Fallback-Sicherheit
 
-Die bisherigen Offset-/Stufen-Dateien bleiben deshalb als Legacy/Fallback dokumentiert und werden nicht gelöscht.
-
----
-
-## `hvac_action`
-
-Die lokale Integration liefert den echten Betriebszustand:
-
-```text
-heating  -> Anlage heizt aktiv
-cooling  -> Anlage kühlt aktiv
-idle     -> Anlage ist eingeschaltet, Verdichter arbeitet gerade nicht
-```
-
-Für Zusatzheizungen bleibt diese Information wichtig. `idle` ist kein Beweis dafür, dass der Raum bereits warm genug ist. Externe Temperaturbedingungen und Hysteresen müssen weiterhin entscheiden, ob Zusatzwärme erforderlich ist.
-
-`AUTO + cooling` bleibt dagegen ein klarer Sperrzustand für Zusatzheizungen.
-
----
-
-## Wunschtemperatur
-
-Im empfohlenen Remote-Temperature-Weg gilt:
-
-```text
-Wunschtemperatur-Helfer = Benutzerwunsch / Quelle der Wahrheit
-Klima-Sollwert           = derselbe Wunschwert (nur Geräteauflösung beachten)
-Externer Sensor          = reale Raumtemperaturquelle für Mitsubishi
-```
-
-Damit entfällt die frühere Logik:
-
-```text
-interner Sensor -> Fehler berechnen -> Offset/Stufe -> künstlicher Gerätesollwert
-```
-
----
-
-## Bestehende Dateien / Archiv
-
-| Datei | Status |
-| --- | --- |
-| `melcloud_home_external_temperature_control_public.yaml` | weiterhin sinnvoll für MELCloud-Home-Primärbetrieb |
-| `living_room_multi_sensor.yaml` | Legacy/Fallback |
-| `bedroom_single_sensor.yaml` | Legacy/Fallback |
-| `melcloud_refresh_5min.yaml` | Legacy MELCloud |
-| `optional_horizontal_swing.yaml` | geräteabhängige Legacy-Ergänzung |
-| `local_primary_hvac_action_aux_heating_example.yaml` | Zusatz-/Sicherheitslogik weiterhin nützlich, Temperaturkompensation für Remote-Betrieb nicht mehr empfohlen |
-| `LOCAL_CONTROLLER_DESIGN_NOTES.md` | technische Historie / Designentscheidungen |
-| `LOCAL_CONTROL_WITH_MELCLOUD_FALLBACK.md` | Migrations-/Fallback-Hintergrund; Remote Temperature hat für die Hauptregelung Vorrang |
-| `REMOTE_TEMPERATURE_RECOMMENDED.md` | neue empfohlene Anleitung |
+Alte lokale Offset-/Stufen-Dokumente sind nur noch **Archiv/Legacy**. Wer über einen alten Link hierher kommt, sollte die aktuelle Anleitung oben verwenden.
 
 ---
 
 ## Wichtig
 
-Nicht zwei vollständige Hauptregelungen gleichzeitig gegen dieselbe Klimaanlage laufen lassen.
+Nicht zwei vollständige Hauptregelungen gleichzeitig gegen dasselbe Klimagerät laufen lassen.
 
-Die veröffentlichten Beispiele enthalten keine Passwörter, Tokens, API-Keys, E-Mail-Adressen, privaten IP-/MAC-Adressen oder persönlichen Namen.
-
-Feedback von anderen Mitsubishi-/MAC-577IF2-E-Nutzern ist willkommen – besonders zu Remote Temperature, AUTO, `hvac_action`, Sensor-Fallback, Polling und Verhalten bei HA-/Netzwerkausfall.
+Vor Änderungen an Integration, Entity-IDs oder Automationen immer ein Home-Assistant-Backup erstellen.
